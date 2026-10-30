@@ -99,6 +99,27 @@ fn field_bytes(f: &Field, v: &Value) -> Result<Vec<u8>, ArgError> {
             }
             b
         }
+        FieldType::Utf32 => {
+            let s = v.as_str().ok_or_else(|| invalid(f, "expected a string"))?;
+            if s.contains('\0') {
+                return Err(invalid(f, "contains a NUL character"));
+            }
+            let len = f.len.unwrap_or(0);
+            let n = s.chars().count();
+            if n >= len {
+                return Err(invalid(
+                    f,
+                    format!(
+                        "{n} characters, field holds {} plus terminator",
+                        len.saturating_sub(1)
+                    ),
+                ));
+            }
+            s.chars()
+                .chain(std::iter::once('\0'))
+                .flat_map(|c| u32::from(c).to_le_bytes())
+                .collect()
+        }
         FieldType::Cstr => {
             let s = v.as_str().ok_or_else(|| invalid(f, "expected a string"))?;
             if s.as_bytes().contains(&0) {
@@ -155,6 +176,15 @@ pub fn decode(func: &FuncSpec, record: &Sutest) -> Map<String, Value> {
                 let end = b.iter().position(|&x| x == 0).unwrap_or(b.len());
                 json!(String::from_utf8_lossy(&b[..end]))
             }
+            FieldType::Utf32 => json!(
+                b.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|w| u32::from_le_bytes(*w))
+                    .take_while(|&cp| cp != 0)
+                    .map(|cp| char::from_u32(cp).unwrap_or(char::REPLACEMENT_CHARACTER))
+                    .collect::<String>()
+            ),
         };
         out.insert(f.name.clone(), v);
     }
@@ -218,6 +248,39 @@ mod tests {
         let out = decode(get, &rec);
         assert_eq!(out["version"], json!("4.2.0"));
         assert_eq!(out["raw"], json!("deadbeef"));
+    }
+
+    #[test]
+    fn utf32_roundtrip_and_limits() {
+        let f = Field {
+            name: "t".into(),
+            offset: 20,
+            ty: FieldType::Utf32,
+            len: Some(4),
+            default: None,
+            doc: String::new(),
+        };
+        let b = field_bytes(&f, &json!("aé")).unwrap();
+        assert_eq!(b, [0x61, 0, 0, 0, 0xe9, 0, 0, 0, 0, 0, 0, 0]);
+        assert!(field_bytes(&f, &json!("abcd")).is_err(), "no room for terminator");
+        let spec = FuncSpec {
+            func: 0,
+            name: "x".into(),
+            safety: crate::safety::Safety::Read,
+            doc: String::new(),
+            request: vec![],
+            response: vec![f],
+            verified: true,
+        };
+        let mut rec = Sutest::new(30, 0, 1);
+        rec.put(20, &b).unwrap();
+        assert_eq!(decode(&spec, &rec)["t"], json!("aé"));
+        rec.put(20, &0xD800u32.to_le_bytes()).unwrap();
+        assert_eq!(
+            decode(&spec, &rec)["t"],
+            json!("\u{FFFD}é"),
+            "invalid code points are replaced, not dropped"
+        );
     }
 
     #[test]

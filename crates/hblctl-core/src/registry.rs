@@ -29,6 +29,8 @@ pub enum FieldType {
     Bytes,
     /// UTF-8 text in a fixed `len`-byte buffer, NUL-terminated when shorter.
     Cstr,
+    /// Text as `len` little-endian 32-bit Unicode code points, zero-terminated when shorter.
+    Utf32,
 }
 
 impl FieldType {
@@ -40,7 +42,7 @@ impl FieldType {
             FieldType::U16 => Some(2),
             FieldType::U32 | FieldType::S32 => Some(4),
             FieldType::U64 => Some(8),
-            FieldType::Bytes | FieldType::Cstr => None,
+            FieldType::Bytes | FieldType::Cstr | FieldType::Utf32 => None,
         }
     }
 }
@@ -70,7 +72,10 @@ impl Field {
     /// Bytes the field occupies.
     #[must_use]
     pub fn size(&self) -> usize {
-        self.ty.width().unwrap_or(self.len.unwrap_or(0))
+        match self.ty {
+            FieldType::Utf32 => 4 * self.len.unwrap_or(0),
+            ty => ty.width().unwrap_or(self.len.unwrap_or(0)),
+        }
     }
 }
 
@@ -119,6 +124,19 @@ pub struct Registry {
     pub target: String,
     /// Commands.
     pub commands: Vec<CommandSpec>,
+}
+
+/// The registry for the original Hasselblad X2D 100C on firmware 4.2.0, built into the crate.
+pub const X2D_4_2_0: &str = include_str!("../registry/x2d-4.2.0.json");
+
+/// The built-in registry.
+///
+/// # Panics
+///
+/// Only if the shipped file is invalid, which the test suite rules out.
+#[must_use]
+pub fn builtin() -> Registry {
+    Registry::from_json(X2D_4_2_0).expect("built-in registry is validated by the test suite")
 }
 
 /// A registry file failed validation.
@@ -185,7 +203,7 @@ impl CommandSpec {
 fn check_layout(what: &str, fields: &[Field]) -> Result<(), Invalid> {
     let mut spans: Vec<(usize, usize, &str)> = Vec::new();
     for f in fields {
-        if matches!(f.ty, FieldType::Bytes | FieldType::Cstr) && f.len.unwrap_or(0) == 0 {
+        if matches!(f.ty, FieldType::Bytes | FieldType::Cstr | FieldType::Utf32) && f.len.unwrap_or(0) == 0 {
             return Err(Invalid(format!("{what}: field {} needs a non-zero len", f.name)));
         }
         let (start, end) = (f.offset, f.offset + f.size());
@@ -217,7 +235,9 @@ pub fn input_schema(f: &FuncSpec) -> Value {
             FieldType::U64 => json!({"type": "integer", "minimum": 0}),
             FieldType::Bytes => json!({"type": "string", "pattern": "^([0-9a-fA-F]{2})*$",
                 "maxLength": 2 * fld.len.unwrap_or(0), "description": "hex"}),
-            FieldType::Cstr => json!({"type": "string", "maxLength": fld.len.unwrap_or(0)}),
+            FieldType::Cstr => json!({"type": "string", "maxLength": fld.len.unwrap_or(0).saturating_sub(1)}),
+            FieldType::Utf32 => json!({"type": "string", "maxLength": fld.len.unwrap_or(0).saturating_sub(1),
+                "description": "characters (Unicode code points)"}),
         };
         if !fld.doc.is_empty() {
             s["description"] = Value::String(fld.doc.clone());
