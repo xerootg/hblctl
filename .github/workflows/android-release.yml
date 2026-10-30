@@ -18,8 +18,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: android-actions/setup-android@v3
-      - run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;29.0.14206865'
+      # The ubuntu runner ships an Android SDK at $ANDROID_HOME; accept licences and add what the app needs.
+      - run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-35' 'build-tools;35.0.0' 'ndk;29.0.14206865'
       # Gradle version comes from android/gradle/wrapper (pinned to 9.0.0; AGP 8.13 needs <= 9.5).
       - uses: gradle/actions/setup-gradle@v4
       - run: cargo install cargo-ndk --locked
