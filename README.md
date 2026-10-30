@@ -61,3 +61,46 @@ This repository contains no vendor firmware or code; protocol facts were derived
 Prior public work: [WeiCheng97/Hasselblad-X2d-series-5g-unlock](https://github.com/WeiCheng97/Hasselblad-X2d-series-5g-unlock)
 (diagnostic channel and frame format), [derrickyau9/Hasselblad-X2DII-ADB-Enable](https://github.com/derrickyau9/Hasselblad-X2DII-ADB-Enable)
 (HblShell route on X2D II).
+
+## Mods
+
+`hblctl-mods` consumes declarative bundles as passive data. It never executes bundled
+source or downloads patch tools. A pinned JSON Schema and semantic checks validate
+references, dependency cycles, ordered steps, literal paths, artifact hashes and
+`byte-edits-v1` recipes. Loading requires a companion `<bundle>.sha256` sidecar and
+an exact archive inventory. SHA-256 detects corruption; it does not authenticate a
+publisher. The preview in `reference/` is blocked and cannot authorize changes;
+its loading test pins the locally supplied fixture checksum.
+
+```
+hblctl mods load reference/x2d-toolkit-bundle-0.1.0-preview.1.tar.zst
+hblctl --allow destructive mods plan bundle.tar.zst --via adb afc
+hblctl --allow destructive mods apply bundle.tar.zst --via adb afc        # dry run
+hblctl --allow destructive mods apply bundle.tar.zst --via adb afc --go
+hblctl --allow destructive mods status bundle.tar.zst --via adb --recovery-session SESSION
+hblctl --allow destructive mods revert bundle.tar.zst --via adb --all --recovery-session SESSION --go
+```
+
+The engine checks model, firmware, exact stock hashes, symlink ancestors, mount
+identity, dependencies and conflicts before writing. Effective safety is the maximum
+of the step effect, declared transport floor and backend floor. Rollback policy is
+checked before installation too. ADB shell operations have a destructive floor,
+even reads, and execution requires typing `mods.apply` or `mods.revert` after `--go`.
+The diagnostic file-transfer commands are unverified; there is no diagnostic backend.
+
+Original bytes and modes are recorded in a private, fsynced session journal with
+separate host backups and verified on-camera toolkit backups. Journal evidence
+precedes each step. Payloads precede startup hooks, writes are read back, and the
+original read-only mount is checked before commit. Ordinary failures attempt
+rollback; transport loss retains evidence and requires explicit recovery with the
+original `--recovery-session`. Recovery accepts exact recorded bytes or a proven
+interrupted prefix and refuses unknown changes. Shared files survive partial revert
+while another selected feature owns them. Every step, hash, backup and journal write
+is traced under `hblctl::mods` into the session event log. Reboot is required after
+install and restore and remains an explicit owner action.
+
+**Camera execution remains gated:** ADB file operations exist, but production runtime
+withdrawal, service readiness and USB acceptance checks do not yet have reviewed
+fixed commands. ADB apply/revert therefore refuse before mutation. MemoryFs exercises
+the transaction engine with write failures and mid-write power loss. No physical
+camera acceptance or post-reboot upgrade verification is claimed.

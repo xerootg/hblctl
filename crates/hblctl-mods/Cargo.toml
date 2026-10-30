@@ -1,0 +1,27 @@
+[package]
+name = "hblctl-mods"
+description = "Mods engine: applies and reverts declarative feature bundles on the camera as journaled transactions."
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+hblctl-core = { path = "../hblctl-core", version = "0.1.0" }
+jsonschema = { version = "0.33", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tar = "0.4"
+thiserror = "2"
+toml = "0.9"
+tracing = "0.1"
+tempfile = "3"
+zstd = "0.14"
+
+[dev-dependencies]
+proptest = "1"

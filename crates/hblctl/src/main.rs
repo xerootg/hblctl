@@ -12,6 +12,7 @@ mod cli;
 mod dump;
 mod logging;
 mod mcp;
+mod mods;
 mod session;
 mod tui;
 
@@ -48,6 +49,7 @@ fn app(reg: &Registry) -> Command {
                 .arg(Arg::new("hex").long("hex").action(ArgAction::SetTrue).help("Also print chunk bytes")),
         ),
     )
+    .subcommand(mods::command())
     .subcommand(Command::new("sessions").about("Print where session logs and captures are written"))
     .subcommands(cli::operations(reg))
 }
@@ -78,6 +80,7 @@ fn main() -> Result<()> {
     let reg = load_registry(&argv)?;
     let m = app(&reg).get_matches_from(&argv);
     match m.subcommand() {
+        Some(("mods", mm)) => mods::run(&m, mm, &argv),
         Some(("ops", _)) => {
             for (c, f) in reg.operations() {
                 println!(

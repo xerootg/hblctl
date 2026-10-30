@@ -11,6 +11,7 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+hblctl-mods = { path = "../hblctl-mods", version = "0.1.0" }
 hblctl-proto = { path = "../hblctl-proto", version = "0.1.0" }
 hblctl-transport = { path = "../hblctl-transport", version = "0.1.0" }
 hblctl-core = { path = "../hblctl-core", version = "0.1.0" }

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/hblctl","crates/hblctl-core","crates/hblctl-proto", "crates/hblctl-transport"]
+members = ["crates/hblctl","crates/hblctl-core", "crates/hblctl-mods","crates/hblctl-proto", "crates/hblctl-transport"]
 
 [workspace.package]
 edition = "2024"
