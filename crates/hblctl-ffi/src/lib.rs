@@ -51,42 +51,42 @@ impl From<Safety> for hblctl_core::Safety {
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum Error {
     /// Policy prevented sending.
-    #[error("refused: {message}")]
+    #[error("refused: {detail}")]
     Refused {
         /// Reason.
-        message: String,
+        detail: String,
     },
     /// Invalid operation or arguments.
-    #[error("arguments: {message}")]
+    #[error("arguments: {detail}")]
     Arguments {
         /// Reason.
-        message: String,
+        detail: String,
     },
     /// Connection or protocol failure.
-    #[error("transport: {message}")]
+    #[error("transport: {detail}")]
     Transport {
         /// Reason.
-        message: String,
+        detail: String,
     },
     /// Filesystem or runtime failure.
-    #[error("session: {message}")]
+    #[error("session: {detail}")]
     Session {
         /// Reason.
-        message: String,
+        detail: String,
     },
 }
 fn session_error(e: impl std::fmt::Display) -> Error {
     Error::Session {
-        message: e.to_string(),
+        detail: e.to_string(),
     }
 }
 impl From<DispatchError> for Error {
     fn from(e: DispatchError) -> Self {
         let message = e.to_string();
         match e {
-            DispatchError::Refused(_) => Self::Refused { message },
-            DispatchError::Args(_) | DispatchError::Unknown(_) => Self::Arguments { message },
-            DispatchError::Client(_) => Self::Transport { message },
+            DispatchError::Refused(_) => Self::Refused { detail: message },
+            DispatchError::Args(_) | DispatchError::Unknown(_) => Self::Arguments { detail: message },
+            DispatchError::Client(_) => Self::Transport { detail: message },
         }
     }
 }
@@ -120,7 +120,7 @@ impl Registry {
             .command(&command)
             .and_then(|c| c.func(&func))
             .ok_or_else(|| Error::Arguments {
-                message: format!("unknown operation {command}.{func}"),
+                detail: format!("unknown operation {command}.{func}"),
             })?;
         Ok(registry::input_schema(f).to_string())
     }
@@ -209,7 +209,7 @@ fn run<T: Transport + Send>(
 ) -> Result<String, Error> {
     let args: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(args).map_err(|e| Error::Arguments {
-            message: e.to_string(),
+            detail: e.to_string(),
         })?;
     runtime
         .block_on(dispatch::invoke(
@@ -246,7 +246,7 @@ impl Session {
                 .block_on(TcpTransport::connect(&format!("{host}:{port}"), timeout, timeout))
                 .map(|tcp| Client::new(Recording::new(Link::Tcp(tcp), capture), timeout, 1))
                 .map_err(|e| Error::Transport {
-                    message: e.to_string(),
+                    detail: e.to_string(),
                 })
         })?;
         Ok(Self {
@@ -267,7 +267,7 @@ impl Session {
         let result = {
             let mut inner = self.inner.lock().map_err(session_error)?;
             let client = inner.client.as_mut().ok_or_else(|| Error::Transport {
-                message: "disconnected".into(),
+                detail: "disconnected".into(),
             })?;
             let result = tracing::dispatcher::with_default(&self.log, || {
                 let result = run(&self.runtime, client, self.policy, &command, &func, &args_json);
@@ -299,10 +299,10 @@ impl Session {
     }
 }
 impl Session {
-    fn notify(&self, message: String) {
+    fn notify(&self, detail: String) {
         let callback = self.callback.lock().ok().and_then(|c| c.clone());
         if let Some(callback) = callback {
-            callback.status(message);
+            callback.status(detail);
         }
     }
 }

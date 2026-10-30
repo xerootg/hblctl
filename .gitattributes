@@ -1,0 +1,9 @@
+# Byte-exact text on every platform: the mods engine hashes files it ships (bundle.schema.json) and the
+# registry JSON; CRLF checkouts would break those pins.
+* text=auto eol=lf
+*.bat text eol=crlf
+*.jar binary
+*.zst binary
+*.hblcap binary
+*.png binary
+*.jpg binary
