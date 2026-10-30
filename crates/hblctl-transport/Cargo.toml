@@ -11,7 +11,7 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-hblctl-proto = { path = "../hblctl-proto", version = "0.1.0" }
+hblctl-proto = { path = "../hblctl-proto", version = "0.2.0" }
 thiserror = "2"
 tokio = { version = "1", features = ["net", "io-util", "time", "sync", "rt", "macros"] }
 tracing = "0.1"
