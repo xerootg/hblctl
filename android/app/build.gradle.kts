@@ -23,6 +23,23 @@ android {
     sourceSets["main"].java.srcDir(layout.buildDirectory.dir("generated/uniffi"))
     sourceSets["main"].jniLibs.srcDir(layout.buildDirectory.dir("generated/jniLibs"))
     packaging { resources.excludes += listOf("META-INF/AL2.0", "META-INF/LGPL2.1") }
+    // Release signing comes from the environment (CI decodes the keystore from a secret). Without it the
+    // release build type stays unsigned, so PR builds and local builds need nothing extra.
+    val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+    if (keystorePath != null) {
+        signingConfigs.create("release") {
+            storeFile = file(keystorePath)
+            storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: "hblctl"
+            keyPassword = System.getenv("ANDROID_KEY_PASSWORD") ?: System.getenv("ANDROID_KEYSTORE_PASSWORD")
+        }
+    }
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            if (keystorePath != null) signingConfig = signingConfigs.getByName("release")
+        }
+    }
 }
 kotlin { jvmToolchain(21) }
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {

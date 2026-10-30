@@ -1,14 +1,30 @@
 # SPDX-FileCopyrightText: 2026 Haley Grandle
 # SPDX-License-Identifier: LGPL-3.0-or-later
 name: Android release APK
+# Runs after release-plz creates a release (workflow_call), for releases published by hand
+# (release event), or on demand for an existing tag (workflow_dispatch). A release made with the
+# built-in GITHUB_TOKEN does not fire the release event, which is why release-plz calls this directly.
 on:
   release:
     types: [published]
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to attach the APK to (e.g. v0.1.0)
+        required: true
+        type: string
 permissions:
   contents: write
 jobs:
   android-release:
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -27,9 +43,28 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - run: cargo install cargo-ndk --locked
       - run: cargo fetch --locked
-      - run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
+      # Signed with the project's release key so Obtainium and manual installs update in place across versions.
+      - run: |
+          if [ -n "$ANDROID_KEYSTORE_B64" ]; then
+            printf '%s' "$ANDROID_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "APK_TASK=assembleRelease" >> "$GITHUB_ENV"
+            echo "APK_SRC=android/app/build/outputs/apk/release/app-release.apk" >> "$GITHUB_ENV"
+            echo "APK_NAME=hblctl-${RELEASE_TAG}.apk" >> "$GITHUB_ENV"
+          else
+            echo "::warning::ANDROID_KEYSTORE_B64 secret not set: uploading a debug-signed APK; it will not update in place"
+            echo "APK_TASK=assembleDebug" >> "$GITHUB_ENV"
+            echo "APK_SRC=android/app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_ENV"
+            echo "APK_NAME=hblctl-${RELEASE_TAG}-debug-unsigned.apk" >> "$GITHUB_ENV"
+          fi
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+      - run: ./gradlew --no-daemon :app:testDebugUnitTest ":app:$APK_TASK"
         working-directory: android
-      - run: gh release upload "$RELEASE_TAG" android/app/build/outputs/apk/debug/app-debug.apk --clobber
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      - run: cp "$APK_SRC" "$APK_NAME"
+      - run: gh release upload "$RELEASE_TAG" "$APK_NAME" --clobber
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}

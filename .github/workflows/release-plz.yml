@@ -32,14 +32,28 @@ jobs:
   release:
     name: release
     runs-on: ubuntu-latest
+    outputs:
+      releases_created: ${{ steps.rp.outputs.releases_created }}
+      tag: ${{ fromJSON(steps.rp.outputs.releases || '[{}]')[0].tag }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
-      - uses: release-plz/action@v0.5
+      - id: rp
+        uses: release-plz/action@v0.5
         with:
           command: release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  # Releases made with GITHUB_TOKEN do not trigger other workflows, so the APK job is called directly.
+  apk:
+    name: release APK
+    needs: release
+    if: needs.release.outputs.releases_created == 'true'
+    uses: ./.github/workflows/android-release.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+    secrets: inherit
