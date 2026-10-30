@@ -640,7 +640,7 @@ impl<'a, F: CameraFs> Engine<'a, F> {
         if j.features.is_empty() {
             self.camera.remove(&format!("{}/journal.json", j.root))?;
             fs::remove_file(self.session.join("journal.json"))?;
-            HostFile::open(self.session)?.sync_all()?;
+            sync_dir(self.session)?;
         } else {
             j.step = "committed-partial-restore".into();
             self.commit(j)?;
@@ -710,6 +710,17 @@ fn durable(path: &Path, bytes: &[u8]) -> Result<()> {
     file.write_all(bytes)?;
     file.as_file().sync_all()?;
     file.persist(path).map_err(|e| Error::Io(e.error))?;
-    HostFile::open(parent)?.sync_all()?;
+    sync_dir(parent)?;
+    Ok(())
+}
+
+/// Flush a directory's metadata so a just-renamed or removed entry survives power loss. Unix opens the
+/// directory and fsyncs it; Windows has no directory fsync and refuses to open directories as files, so
+/// the file-level `sync_all` calls are all it offers.
+fn sync_dir(path: &std::path::Path) -> Result<()> {
+    #[cfg(unix)]
+    HostFile::open(path)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
