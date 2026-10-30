@@ -1,0 +1,15 @@
+[package]
+name = "hblctl-proto"
+description = "Wire format of the Hasselblad X-system factory diagnostic (sutest) protocol. No I/O."
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+proptest = "1"
