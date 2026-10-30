@@ -4,27 +4,25 @@
 //! `hblctl`: client for the Hasselblad X-system factory diagnostic protocol.
 //!
 //! The command line is generated from the registry (`hblctl <command> <func> --field VALUE`), next to a few
-//! fixed commands: `ops`, `mcp`, `capture dump` and `sessions`. Every run that talks to a camera gets a
+//! fixed commands: `ops`, `tui`, `mcp`, `capture dump` and `sessions`. Every run that talks to a camera gets a
 //! session directory with a JSON event log and a binary capture of the socket.
 
+mod camera;
 mod cli;
 mod dump;
 mod logging;
 mod mcp;
 mod session;
+mod tui;
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Arg, ArgAction, ArgMatches, Command};
+use hblctl_core::dispatch;
 use hblctl_core::registry::{self, Registry};
 use hblctl_core::safety::Policy;
-use hblctl_core::{Client, dispatch};
 use hblctl_transport::capture::CaptureReader;
-use hblctl_transport::recording::Recording;
-use hblctl_transport::tcp::TcpTransport;
 
 fn app(reg: &Registry) -> Command {
     cli::globals(Command::new("hblctl").version(env!("CARGO_PKG_VERSION")).about(
@@ -39,6 +37,7 @@ fn app(reg: &Registry) -> Command {
             .help("Directory for session logs and captures (default: the platform state directory)"),
     )
     .subcommand_required(true)
+    .subcommand(Command::new("tui").about("Interactive registry-generated camera console"))
     .subcommand(Command::new("ops").about("List every operation with its safety class"))
     .subcommand(Command::new("mcp").about("Serve the operations allowed by --allow as MCP tools on stdin/stdout"))
     .subcommand(
@@ -109,6 +108,11 @@ fn main() -> Result<()> {
             println!("{}", sessions_root(&m).display());
             Ok(())
         }
+        Some(("tui", _)) => {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let camera = camera::CameraSession::open(&m, &argv, Some(tx))?;
+            tui::run(camera, reg, Policy::up_to(cli::allowed(&m)), &rx)
+        }
         Some(("mcp", _)) => run_camera(&m, &argv, reg, true),
         Some(_) => run_camera(&m, &argv, reg, false),
         None => unreachable!("subcommand_required"),
@@ -122,28 +126,8 @@ fn sessions_root(m: &ArgMatches) -> PathBuf {
 
 /// Open a session, connect (recording every byte), then run one operation or the MCP server.
 fn run_camera(m: &ArgMatches, argv: &[String], reg: Registry, mcp_mode: bool) -> Result<()> {
-    let session = session::Session::create(&sessions_root(m), argv)?;
-    let events = std::fs::File::create(session.events_path()).context("creating events.jsonl")?;
-    let console = match m.get_count("verbose") {
-        0 => "warn",
-        1 => "info",
-        2 => "debug",
-        _ => "trace",
-    };
-    // The console log goes to stderr; in MCP mode stdout carries the protocol.
-    tracing::subscriber::set_global_default(logging::subscriber(
-        logging::Shared(Arc::new(Mutex::new(events))),
-        console,
-    ))
-    .context("installing logger")?;
-    tracing::info!(target: "hblctl::session", dir = %session.dir.display(), "session started");
-    eprintln!("session: {}", session.dir.display());
-
-    let host = m.get_one::<String>("host").expect("has default").clone();
-    let port = *m.get_one::<u16>("port").expect("has default");
-    let timeout = Duration::from_secs(*m.get_one::<u64>("timeout").expect("has default"));
+    let camera = camera::CameraSession::open(m, argv, None)?;
     let policy = Policy::up_to(cli::allowed(m));
-    let capture = session.capture()?;
     let call = if mcp_mode {
         None
     } else {
@@ -151,10 +135,7 @@ fn run_camera(m: &ArgMatches, argv: &[String], reg: Registry, mcp_mode: bool) ->
     };
 
     tokio::runtime::Runtime::new()?.block_on(async move {
-        let tcp = TcpTransport::connect(&format!("{host}:{port}"), timeout, timeout)
-            .await
-            .with_context(|| format!("connecting to {host}:{port}"))?;
-        let mut client = Client::new(Recording::new(tcp, capture), timeout, initial_cookie());
+        let mut client = camera.connect().await?;
         match call {
             None => {
                 use rmcp::ServiceExt as _;

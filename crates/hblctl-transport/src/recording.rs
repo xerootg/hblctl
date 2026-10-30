@@ -28,6 +28,11 @@ impl<T: Transport, W: Write + Send> Recording<T, W> {
         }
     }
 
+    /// Record into an existing capture, preserving it across reconnects.
+    pub fn with_shared_capture(inner: T, capture: Arc<Mutex<CaptureWriter<W>>>) -> Self {
+        Self { inner, capture }
+    }
+
     fn log(&self, d: Direction, b: &[u8]) -> Result<(), Error> {
         let mut c = self
             .capture
@@ -70,6 +75,24 @@ mod tests {
     use super::*;
     use crate::capture::{CaptureReader, Record};
     use crate::mock::{MockTransport, Step};
+
+    #[tokio::test]
+    async fn reconnects_append_to_one_capture() {
+        let mut bytes = Vec::new();
+        let capture = Arc::new(Mutex::new(CaptureWriter::new(&mut bytes).unwrap()));
+        for byte in [1, 2] {
+            let mut recording = Recording::with_shared_capture(
+                MockTransport::new([Step::Expect(vec![byte])]),
+                capture.clone(),
+            );
+            recording.send(&[byte]).await.unwrap();
+        }
+        drop(capture);
+        let records = CaptureReader::new(&bytes[..]).unwrap().records().unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].bytes, vec![1]);
+        assert_eq!(records[1].bytes, vec![2]);
+    }
 
     #[tokio::test]
     async fn records_both_directions_in_order() {

@@ -23,6 +23,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net",
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "fmt"] }
 rmcp = { version = "3.8.0", features = ["server", "transport-io"] }
+ratatui = "0.30.2"
+crossterm = "0.29.0"
 
 [dev-dependencies]
 tempfile = "3"

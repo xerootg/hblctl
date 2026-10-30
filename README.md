@@ -13,6 +13,7 @@ server for AI agents, so every command is available everywhere with no per-front
 hblctl ops                                    # every operation with its safety class
 hblctl firmware-version build-version         # read-only operations run by default
 hblctl --allow volatile wifi-power get        # anything above `read` must be allowed explicitly
+hblctl tui                                    # interactive operation list, forms, results and protocol log
 hblctl mcp                                    # MCP server on stdio (read-only tools unless --allow is given)
 hblctl capture dump <session>/capture.hblcap  # decode a recorded session
 ```
@@ -34,6 +35,11 @@ every interface (the camera's Wi-Fi hotspot and its USB network link) and relays
 The command set (43 commands) is described as data in
 [`crates/hblctl-core/registry/x2d-4.2.0.json`](crates/hblctl-core/registry/x2d-4.2.0.json); operations whose layouts
 are not fully established are marked `verified: false` and show `(layout unverified)` in the CLI.
+
+In the TUI, type to filter operations, use ↑/↓ to select, and Tab to switch to the generated form.
+Type/backspace edits a field; Enter validates and runs. PgUp/PgDn scroll the result. Esc cancels confirmation
+or clears the filter, Ctrl-R reconnects, and Ctrl-C exits. The connection opens on the first operation.
+Destructive operations require typing their full `command.function` name after allowing that safety class.
 
 ## Safety
 

@@ -232,7 +232,7 @@ pub fn input_schema(f: &FuncSpec) -> Value {
             FieldType::U16 => json!({"type": "integer", "minimum": 0, "maximum": u16::MAX}),
             FieldType::U32 => json!({"type": "integer", "minimum": 0, "maximum": u32::MAX}),
             FieldType::S32 => json!({"type": "integer", "minimum": i32::MIN, "maximum": i32::MAX}),
-            FieldType::U64 => json!({"type": "integer", "minimum": 0}),
+            FieldType::U64 => json!({"type": "integer", "minimum": 0, "maximum": u64::MAX}),
             FieldType::Bytes => json!({"type": "string", "pattern": "^([0-9a-fA-F]{2})*$",
                 "maxLength": 2 * fld.len.unwrap_or(0), "description": "hex"}),
             FieldType::Cstr => json!({"type": "string", "maxLength": fld.len.unwrap_or(0).saturating_sub(1)}),
@@ -310,6 +310,16 @@ pub(crate) mod tests {
         assert!(Registry::from_json(&header).is_err());
         let dup = SAMPLE.replace(r#""name": "firmware-version""#, r#""name": "prod-config""#);
         assert!(Registry::from_json(&dup).unwrap_err().0.contains("duplicate"));
+    }
+
+    #[test]
+    fn u64_schema_includes_the_codec_range() {
+        let mut spec = sample().commands[1].funcs[0].clone();
+        spec.request[0].ty = FieldType::U64;
+        assert_eq!(
+            input_schema(&spec)["properties"]["which"]["maximum"],
+            json!(u64::MAX)
+        );
     }
 
     #[test]
