@@ -102,7 +102,7 @@ mod tests {
         };
         let t = MockTransport::new([
             Step::Expect(BusFrame::command(req).encode()),
-            Step::Reply(reply.encode()),
+            Step::Reply(reply.encode_reply_message()),
         ]);
         let mut c = Client::new(t, Duration::from_secs(1), 1);
         let v = invoke(

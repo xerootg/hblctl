@@ -15,8 +15,8 @@ use hblctl_transport::framer::{Event, Framer};
 /// Render records as text lines. With `hex`, each chunk's bytes are printed too.
 #[must_use]
 pub(crate) fn render(records: &[Record], hex: bool) -> Vec<String> {
-    let mut tx = Framer::new();
-    let mut rx = Framer::new();
+    let mut tx = Framer::requests();
+    let mut rx = Framer::replies();
     let mut out = Vec::new();
     for r in records {
         #[allow(clippy::cast_precision_loss)] // display only

@@ -117,7 +117,7 @@ impl<T: Transport> Client<T> {
     pub fn new(transport: T, timeout: Duration, first_cookie: u32) -> Self {
         Self {
             transport,
-            framer: Framer::new(),
+            framer: Framer::replies(),
             next_cookie: first_cookie,
             timeout,
         }
@@ -226,7 +226,7 @@ mod tests {
             },
             record: r,
         }
-        .encode()
+        .encode_reply_message()
     }
 
     fn request(cmd: u32, func: u32, cookie: u32, data: &[u8]) -> Vec<u8> {
@@ -240,7 +240,7 @@ mod tests {
         let mut stream = reply(49, FUNC_PROGRESS, 100, &[(0x10, 1), (0x14, 5)], None);
         stream.extend(reply(49, FUNC_NOTIFICATION, 100, &[(0x14, 7)], None));
         stream.extend(reply(49, 2, 100, &[(0x10, 0), (0x18, 6)], None));
-        let (a, b) = stream.split_at(300);
+        let (a, b) = stream.split_at(1300);
         let t = MockTransport::new([
             Step::Expect(request(49, 2, 100, &[0, 0, 0, 0, 13, 0, 0, 0])),
             Step::Reply(a.to_vec()),

@@ -196,7 +196,7 @@ mod tests {
         };
         let t = MockTransport::new([
             Step::Expect(BusFrame::command(req).encode()),
-            Step::Reply(reply.encode()),
+            Step::Reply(reply.encode_reply_message()),
         ]);
         let server = McpServer::new(Client::new(t, Duration::from_secs(1), 1), reg, Policy::default());
         let mut args = Map::new();

@@ -3,11 +3,13 @@
 
 //! Turns a byte stream into [`BusFrame`]s.
 //!
-//! TCP delivers arbitrary chunks: a frame may be split across reads and one read may hold several frames.
+//! TCP delivers arbitrary chunks: a message may be split across reads and one read may hold several.
+//! Requests are bare frames; replies from the camera are fixed-size messages (a frame followed by filler),
+//! so the framer is built for one direction ([`Framer::requests`] or [`Framer::replies`]).
 //! If bytes do not decode (corruption, or a message type we do not know), the framer drops one byte and
 //! tries again, reporting each skipped byte so the event log shows exactly where the stream desynchronised.
 
-use hblctl_proto::bus::{FRAME_SIZE, HEADER_SIZE};
+use hblctl_proto::bus::{FRAME_SIZE, HEADER_SIZE, REPLY_MESSAGE_SIZE};
 use hblctl_proto::{BusFrame, DecodeError};
 
 /// What the framer produced from the bytes fed so far.
@@ -25,16 +27,29 @@ pub enum Event {
 }
 
 /// Incremental frame decoder.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Framer {
     buf: Vec<u8>,
+    message_size: usize,
 }
 
 impl Framer {
-    /// An empty framer.
+    /// For bytes sent to the camera: each message is exactly one frame.
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn requests() -> Self {
+        Self {
+            buf: Vec::new(),
+            message_size: FRAME_SIZE,
+        }
+    }
+
+    /// For bytes received from the camera: each message is [`REPLY_MESSAGE_SIZE`] bytes, a frame then filler.
+    #[must_use]
+    pub fn replies() -> Self {
+        Self {
+            buf: Vec::new(),
+            message_size: REPLY_MESSAGE_SIZE,
+        }
     }
 
     /// Bytes buffered but not yet decoded.
@@ -52,8 +67,9 @@ impl Framer {
                 break;
             }
             match BusFrame::decode(&self.buf) {
-                Ok((frame, used)) => {
-                    self.buf.drain(..used);
+                Ok(_) if self.buf.len() < self.message_size => break,
+                Ok((frame, _)) => {
+                    self.buf.drain(..self.message_size);
                     out.push(Event::Frame(Box::new(frame)));
                 }
                 Err(DecodeError::Short { .. }) if self.buf.len() < FRAME_SIZE => break,
@@ -87,7 +103,7 @@ mod tests {
     fn split_and_coalesced_reads() {
         let (a, b) = (frame(1), frame(2));
         let bytes = [a.encode(), b.encode()].concat();
-        let mut f = Framer::new();
+        let mut f = Framer::requests();
         assert_eq!(f.push(&bytes[..3]), vec![]);
         assert_eq!(f.push(&bytes[3..200]), vec![]);
         assert_eq!(frames(f.push(&bytes[200..])), vec![a, b]);
@@ -97,7 +113,7 @@ mod tests {
     #[test]
     fn resynchronises_after_garbage() {
         let a = frame(7);
-        let mut f = Framer::new();
+        let mut f = Framer::requests();
         let ev = f.push(&[[0xAA, 0xBB].as_slice(), &a.encode()].concat());
         let skipped: Vec<u8> = ev
             .iter()
@@ -113,12 +129,34 @@ mod tests {
         assert_eq!(frames(ev), vec![a]);
     }
 
+    /// A reply message as `msg2dbus` sends it: frame, three zeros, then arbitrary filler to 1024 bytes.
+    fn reply_message(cookie: u32, filler: u8) -> Vec<u8> {
+        let mut m = frame(cookie).encode();
+        m.extend_from_slice(&[0, 0, 0]);
+        m.resize(REPLY_MESSAGE_SIZE, filler);
+        m
+    }
+
+    #[test]
+    fn reply_messages_are_fixed_size_and_filler_is_ignored() {
+        let bytes = [reply_message(1, 0xAA), reply_message(2, 0x05)].concat();
+        let mut f = Framer::replies();
+        assert_eq!(
+            f.push(&bytes[..600]),
+            vec![],
+            "a frame is not complete until its whole message arrived"
+        );
+        let ev = f.push(&bytes[600..]);
+        assert_eq!(frames(ev), vec![frame(1), frame(2)]);
+        assert_eq!(f.pending(), 0);
+    }
+
     proptest! {
         #[test]
         fn any_chunking_yields_the_same_frames(cuts in proptest::collection::vec(1usize..100, 0..20)) {
             let want: Vec<BusFrame> = (0..3).map(frame).collect();
             let bytes: Vec<u8> = want.iter().flat_map(BusFrame::encode).collect();
-            let mut f = Framer::new();
+            let mut f = Framer::requests();
             let mut got = Vec::new();
             let mut pos = 0;
             for c in cuts {
@@ -132,7 +170,7 @@ mod tests {
 
         #[test]
         fn never_panics_on_noise(noise in proptest::collection::vec(any::<u8>(), 0..1000)) {
-            let _ = Framer::new().push(&noise);
+            let _ = Framer::requests().push(&noise);
         }
     }
 }

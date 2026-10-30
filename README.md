@@ -4,15 +4,36 @@ A client for the factory diagnostic ("sutest") protocol of Hasselblad X-system c
 original **X2D 100C on firmware 4.2.0**. One command registry drives three frontends: a CLI, a TUI, and an MCP
 server for AI agents, so every command is available everywhere with no per-frontend code.
 
-> **Status: under construction.** The protocol specification is being derived from static analysis of the 4.2.0
-> firmware. Nothing here has been run against a camera yet.
+> **Status: early.** The protocol was derived from static analysis of the 4.2.0 firmware and cross-checked against
+> public tools. It has not yet been run against a camera by this project.
+
+## Use
+
+```
+hblctl ops                                    # every operation with its safety class
+hblctl firmware-version build-version         # read-only operations run by default
+hblctl --allow volatile wifi-power get        # anything above `read` must be allowed explicitly
+hblctl mcp                                    # MCP server on stdio (read-only tools unless --allow is given)
+hblctl capture dump <session>/capture.hblcap  # decode a recorded session
+```
 
 ## What the protocol is
 
-The camera runs a root factory-test service (`camera-test`). `camera-gui` exposes it on **TCP port 30303** over the
-camera's Wi-Fi hotspot and its USB network link, relaying fixed 252-byte records over DJI's internal message bus.
-Commands include reading and writing factory configuration, running shell commands as root, file transfer and
-calibration. **There is no authentication.** Anyone who can reach the port can run commands as root.
+The camera runs a root factory-test service (`camera-test`). The bridge `msg2dbus` listens on **TCP port 30303** on
+every interface (the camera's Wi-Fi hotspot and its USB network link) and relays test messages to it over D-Bus.
+
+- A request is one 257-byte message: `05 00 09 05 fc` (signal 5, from node 9 to node 5, type 0xFC) followed by a
+  252-byte record: `u32 cmd | u32 func | u32 cookie | u32 CRC-16/XMODEM of bytes 0x10..0xFC | 236 bytes of data`.
+- Every reply is a 1024-byte message: `09 00 05 09 fc`, the 252-byte result record, then filler.
+- The camera treats each TCP read as one message, so each request goes out in a single write, one at a time.
+- **One connection at a time:** a new connection replaces the previous one, so two hblctl instances (for example the
+  CLI and an MCP server) disconnect each other.
+- **There is no authentication.** Anything that can reach the port can use every command, including ones that run
+  programs as root.
+
+The command set (43 commands) is described as data in
+[`crates/hblctl-core/registry/x2d-4.2.0.json`](crates/hblctl-core/registry/x2d-4.2.0.json); operations whose layouts
+are not fully established are marked `verified: false` and show `(layout unverified)` in the CLI.
 
 ## Safety
 

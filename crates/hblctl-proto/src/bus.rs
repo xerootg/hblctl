@@ -10,7 +10,9 @@
 //! 4 u8     type     0xFC: a 252-byte sutest record follows
 //! 5 ..     body     the record
 //! ```
-//! Values are from the public reference clients; the full set is pending the firmware analysis.
+//! On the TCP port (`msg2dbus -p 30303`) a request is exactly one frame (257 bytes) and every reply is a
+//! [`REPLY_MESSAGE_SIZE`]-byte message starting with one frame. The camera treats each TCP read as one
+//! message, so a request must be sent in a single write.
 
 use crate::DecodeError;
 use crate::sutest::{self, Sutest};
@@ -29,6 +31,9 @@ pub const TYPE_SUTEST: u8 = 0xFC;
 pub const HEADER_SIZE: usize = 5;
 /// Size of a header plus one sutest record.
 pub const FRAME_SIZE: usize = HEADER_SIZE + sutest::SIZE;
+/// Size of every message the camera sends on the TCP port: one frame, three zero bytes, then filler of
+/// unspecified value up to this size (`msg2dbus` resizes its reply buffer to 1024 bytes).
+pub const REPLY_MESSAGE_SIZE: usize = 1024;
 
 /// The 5-byte bus header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +82,15 @@ impl BusFrame {
         v
     }
 
+    /// Encode as the camera sends it on TCP: the frame, zero-padded to [`REPLY_MESSAGE_SIZE`] bytes.
+    /// Used by tests and simulators; the filler is zero here, unspecified on a real camera.
+    #[must_use]
+    pub fn encode_reply_message(&self) -> Vec<u8> {
+        let mut v = self.encode();
+        v.resize(REPLY_MESSAGE_SIZE, 0);
+        v
+    }
+
     /// Decode one frame from the start of `b`; returns the frame and the bytes consumed.
     pub fn decode(b: &[u8]) -> Result<(Self, usize), DecodeError> {
         if b.len() < HEADER_SIZE {
@@ -108,6 +122,9 @@ mod tests {
         let f = BusFrame::command(Sutest::new(49, 2, 0x4842)).encode();
         assert_eq!(&f[..5], &[0x05, 0x00, 9, 5, 0xFC]);
         assert_eq!(f.len(), 257);
+        let r = BusFrame::command(Sutest::new(49, 2, 0x4842)).encode_reply_message();
+        assert_eq!(r.len(), REPLY_MESSAGE_SIZE);
+        assert_eq!(&r[..257], &f[..]);
     }
 
     #[test]
