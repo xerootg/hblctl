@@ -719,7 +719,7 @@ fn durable(path: &Path, bytes: &[u8]) -> Result<()> {
 /// the file-level `sync_all` calls are all it offers.
 fn sync_dir(path: &std::path::Path) -> Result<()> {
     #[cfg(unix)]
-    HostFile::open(path)?.sync_all()?;
+    std::fs::File::open(path)?.sync_all()?;
     #[cfg(not(unix))]
     let _ = path;
     Ok(())
