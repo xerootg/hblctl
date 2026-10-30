@@ -18,7 +18,7 @@ fn from_manifest(
 ) -> hblctl_mods::Result<Bundle> {
     members.insert(
         "schema.json".into(),
-        include_bytes!("../../../reference/schema.json").to_vec(),
+        include_bytes!("../schema/bundle.schema.json").to_vec(),
     );
     Bundle::from_manifest(manifest, members)
 }
@@ -139,10 +139,20 @@ proptest::proptest! {
         proptest::prop_assert_eq!(fs.files,initial);
     }
 }
+
+/// The real toolkit preview bundle is separately licensed content and is not shipped with this crate.
+/// Point `HBLCTL_REFERENCE_BUNDLE` at a local copy to run the tests that need it; they skip otherwise.
+fn reference_bundle() -> Option<std::path::PathBuf> {
+    let p = std::env::var_os("HBLCTL_REFERENCE_BUNDLE")?;
+    Some(std::path::PathBuf::from(p))
+}
+
 #[test]
 fn preview_loads_but_cannot_execute() {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../reference/x2d-toolkit-bundle-0.1.0-preview.1.tar.zst");
+    let Some(path) = reference_bundle() else {
+        eprintln!("skipped: HBLCTL_REFERENCE_BUNDLE not set");
+        return;
+    };
     let fixture_dir = tempfile::tempdir().unwrap();
     let fixture_path = fixture_dir.path().join("preview.tar.zst");
     std::fs::copy(&path, &fixture_path).unwrap();
@@ -300,8 +310,10 @@ fn interrupted_status_and_corrupt_backup_detection() {
 }
 #[test]
 fn missing_and_wrong_sidecars_are_rejected() {
-    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../reference/x2d-toolkit-bundle-0.1.0-preview.1.tar.zst");
+    let Some(source) = reference_bundle() else {
+        eprintln!("skipped: HBLCTL_REFERENCE_BUNDLE not set");
+        return;
+    };
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("bundle.tar.zst");
     std::fs::copy(source, &path).unwrap();
