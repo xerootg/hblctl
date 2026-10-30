@@ -1,8 +1,8 @@
 # hblctl
 
 A client for the factory diagnostic ("sutest") protocol of Hasselblad X-system cameras, starting with the
-original **X2D 100C on firmware 4.2.0**. One command registry drives three frontends: a CLI, a TUI, and an MCP
-server for AI agents, so every command is available everywhere with no per-frontend code.
+original **X2D 100C on firmware 4.2.0**. One command registry drives four frontends: a CLI, a TUI, an MCP
+server for AI agents, and an Android app, so every command is available everywhere with no per-frontend code.
 
 > **Status: early.** The protocol was derived from static analysis of the 4.2.0 firmware and cross-checked against
 > public tools. It has not yet been run against a camera by this project.
@@ -40,6 +40,12 @@ In the TUI, type to filter operations, use ↑/↓ to select, and Tab to switch 
 Type/backspace edits a field; Enter validates and runs. PgUp/PgDn scroll the result. Esc cancels confirmation
 or clears the filter, Ctrl-R reconnects, and Ctrl-C exits. The connection opens on the first operation.
 Destructive operations require typing their full `command.function` name after allowing that safety class.
+
+## Android
+
+The Jetpack Compose app renders operations and forms from the same registry through UniFFI.
+It records sessions and supports capture viewing and ZIP export. See [android/README.md](android/README.md)
+for prerequisites, native binding generation, and APK build/test commands.
 
 ## Safety
 

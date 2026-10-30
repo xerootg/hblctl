@@ -1,1 +1,7 @@
 /target
+
+# Android local/generated output
+android/.gradle/
+android/.kotlin/
+android/**/build/
+android/local.properties

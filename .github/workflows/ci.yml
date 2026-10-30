@@ -86,3 +86,31 @@ jobs:
       - uses: obi1kenobi/cargo-semver-checks-action@v2
         with:
           baseline-rev: origin/${{ github.base_ref }}
+
+  android:
+    name: Android APK and Kotlin tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;29.0.14206865'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.0.0'
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-ndk --locked
+      - run: cargo fetch --locked
+      - run: gradle -p android :app:testDebugUnitTest :app:assembleDebug
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/29.0.14206865
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hblctl-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk

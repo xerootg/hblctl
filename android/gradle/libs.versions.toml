@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: 2026 Haley Grandle
+# SPDX-License-Identifier: LGPL-3.0-or-later
+
+[versions]
+agp = "8.13.0"
+ndk = "29.0.14206865"
+kotlin = "2.2.20"
+compose = "2025.05.01"
+activity = "1.10.1"
+coroutines = "1.10.2"
+jna = "5.17.0"
+junit = "4.13.2"
+json = "1.9.0"
+core = "1.16.0"
+[libraries]
+compose-bom = { module = "androidx.compose:compose-bom", version.ref = "compose" }
+compose-material3 = { module = "androidx.compose.material3:material3" }
+compose-ui = { module = "androidx.compose.ui:ui" }
+activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activity" }
+coroutines = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
+junit = { module = "junit:junit", version.ref = "junit" }
+json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "json" }
+core = { module = "androidx.core:core-ktx", version.ref = "core" }
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

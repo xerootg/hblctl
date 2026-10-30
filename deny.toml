@@ -9,6 +9,11 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+  # basic-toml is unmaintained (not vulnerable). It is reached only through uniffi_bindgen -> askama_derive,
+  # the Kotlin binding generator used at build time; it never runs on a camera or in the shipped app.
+  { id = "RUSTSEC-2026-0374", reason = "build-time only, via uniffi_bindgen/askama; no maintained alternative yet" },
+]
 
 [licenses]
 version = 2
