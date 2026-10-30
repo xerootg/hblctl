@@ -1,0 +1,3 @@
+[default.extend-words]
+# Firmware / protocol identifiers
+hbl = "hbl"

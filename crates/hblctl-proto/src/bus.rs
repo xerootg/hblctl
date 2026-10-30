@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Haley Grandle
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
 //! The message-bus header `camera-gui` uses to relay frames between TCP and `camera-test`.
 //!
 //! ```text
@@ -12,30 +15,46 @@
 use crate::DecodeError;
 use crate::sutest::{self, Sutest};
 
+/// Signal for a test command sent to the camera.
 pub const SIGNAL_TEST_RX: u16 = 0x05;
+/// Signal for a test result sent by the camera.
 pub const SIGNAL_TEST_TX: u16 = 0x09;
+/// Node id of the TCP host (the client side of port 30303).
 pub const NODE_TCP_HOST: u8 = 9;
+/// Node id of the camera ("eagle").
 pub const NODE_EAGLE: u8 = 5;
+/// Message type: a sutest record follows.
 pub const TYPE_SUTEST: u8 = 0xFC;
+/// Size of the bus header.
 pub const HEADER_SIZE: usize = 5;
+/// Size of a header plus one sutest record.
 pub const FRAME_SIZE: usize = HEADER_SIZE + sutest::SIZE;
 
+/// The 5-byte bus header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BusHeader {
+    /// Signal id (`SIGNAL_TEST_RX` or `SIGNAL_TEST_TX`).
     pub signal: u16,
+    /// Sending node.
     pub origin: u8,
+    /// Receiving node.
     pub dest: u8,
+    /// Message type (`TYPE_SUTEST`).
     pub kind: u8,
 }
 
+/// A bus header followed by one sutest record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BusFrame {
+    /// The header.
     pub header: BusHeader,
+    /// The record.
     pub record: Sutest,
 }
 
 impl BusFrame {
     /// A command from the TCP host to the camera.
+    #[must_use]
     pub fn command(record: Sutest) -> Self {
         Self {
             header: BusHeader {
@@ -48,6 +67,8 @@ impl BusFrame {
         }
     }
 
+    /// Encode header and record.
+    #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut v = Vec::with_capacity(FRAME_SIZE);
         v.extend_from_slice(&self.header.signal.to_le_bytes());

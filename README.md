@@ -27,8 +27,9 @@ inspected, replayed, and turned into a regression test.
 
 ## Licence
 
-Dual-licensed under MIT or Apache-2.0, at your option. Not affiliated with Hasselblad or DJI. This repository
-contains no vendor firmware or code; protocol facts were derived independently.
+[LGPL-3.0-or-later](COPYING.LESSER) (which incorporates the [GPL-3.0](COPYING)). Contributions are accepted under the
+same licence plus a relicensing grant; see [CONTRIBUTING.md](CONTRIBUTING.md). Not affiliated with Hasselblad or DJI.
+This repository contains no vendor firmware or code; protocol facts were derived independently.
 
 Prior public work: [WeiCheng97/Hasselblad-X2d-series-5g-unlock](https://github.com/WeiCheng97/Hasselblad-X2d-series-5g-unlock)
 (diagnostic channel and frame format), [derrickyau9/Hasselblad-X2DII-ADB-Enable](https://github.com/derrickyau9/Hasselblad-X2DII-ADB-Enable)

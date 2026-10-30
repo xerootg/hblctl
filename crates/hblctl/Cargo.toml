@@ -1,0 +1,10 @@
+[package]
+name = "hblctl"
+description = "CLI, TUI and MCP server for the Hasselblad X-system factory diagnostic protocol."
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]

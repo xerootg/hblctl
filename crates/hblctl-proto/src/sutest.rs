@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: 2026 Haley Grandle
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
 //! The 252-byte `sutest` record: one factory-test command or its result.
 //!
 //! ```text
@@ -19,12 +22,16 @@ pub const DATA_OFFSET: usize = 0x10;
 /// Size of the CRC-covered region.
 pub const DATA_SIZE: usize = SIZE - DATA_OFFSET;
 
+/// One decoded `sutest` record.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Sutest {
+    /// Command id.
     pub cmd: u32,
+    /// Sub-function of the command.
     pub func: u32,
+    /// Client-chosen value echoed in the result.
     pub cookie: u32,
-    /// Bytes 0x10..0xFC.
+    /// Bytes 0x10..0xFC (the CRC-covered region).
     pub data: [u8; DATA_SIZE],
 }
 
@@ -41,6 +48,8 @@ impl std::fmt::Debug for Sutest {
 }
 
 impl Sutest {
+    /// A record with all data bytes zero.
+    #[must_use]
     pub fn new(cmd: u32, func: u32, cookie: u32) -> Self {
         Self {
             cmd,
@@ -79,22 +88,26 @@ impl Sutest {
         })
     }
 
+    /// Little-endian `u32` at absolute record offset `offset`.
     pub fn u32_at(&self, offset: usize) -> Result<u32, DecodeError> {
-        Ok(u32::from_le_bytes(
-            self.get(offset, 4)?.try_into().expect("4 bytes"),
-        ))
+        let b = self.get(offset, 4)?;
+        Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
 
+    /// CRC-16/XMODEM of the data region.
+    #[must_use]
     pub fn crc(&self) -> u16 {
         crc16_xmodem(&self.data)
     }
 
+    /// Encode to the 252-byte wire form, filling in the CRC.
+    #[must_use]
     pub fn encode(&self) -> [u8; SIZE] {
         let mut b = [0u8; SIZE];
         b[0..4].copy_from_slice(&self.cmd.to_le_bytes());
         b[4..8].copy_from_slice(&self.func.to_le_bytes());
         b[8..12].copy_from_slice(&self.cookie.to_le_bytes());
-        b[12..16].copy_from_slice(&(self.crc() as u32).to_le_bytes());
+        b[12..16].copy_from_slice(&u32::from(self.crc()).to_le_bytes());
         b[DATA_OFFSET..].copy_from_slice(&self.data);
         b
     }
@@ -107,7 +120,7 @@ impl Sutest {
                 have: b.len(),
             });
         }
-        let w = |o: usize| u32::from_le_bytes(b[o..o + 4].try_into().expect("4 bytes"));
+        let w = |o: usize| u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);
         let mut data = [0u8; DATA_SIZE];
         data.copy_from_slice(&b[DATA_OFFSET..SIZE]);
         let s = Self {
@@ -117,7 +130,7 @@ impl Sutest {
             data,
         };
         let stored = w(12);
-        if stored != s.crc() as u32 {
+        if stored != u32::from(s.crc()) {
             return Err(DecodeError::Crc {
                 stored,
                 computed: s.crc(),
@@ -132,7 +145,7 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    /// ProdConfig get wifiRegion, as built by the public reference clients:
+    /// `ProdConfig` get `wifiRegion`, as built by the public reference clients:
     /// cmd 49, func 2, cookie 0x4842, field 13 at 0x14.
     fn prodconfig_get_wifi_region() -> Sutest {
         let mut s = Sutest::new(49, 2, 0x4842);
@@ -147,7 +160,7 @@ mod tests {
         assert_eq!(&b[0..12], &[49, 0, 0, 0, 2, 0, 0, 0, 0x42, 0x48, 0, 0]);
         assert_eq!(&b[0x14..0x18], &[13, 0, 0, 0]);
         let crc = u32::from_le_bytes(b[12..16].try_into().unwrap());
-        assert_eq!(crc, crc16_xmodem(&b[0x10..0xFC]) as u32);
+        assert_eq!(crc, u32::from(crc16_xmodem(&b[0x10..0xFC])));
         assert_eq!(crc >> 16, 0, "crc is a zero-extended u16");
     }
 
