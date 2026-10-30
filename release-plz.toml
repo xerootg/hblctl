@@ -1,6 +1,17 @@
+# One GitHub release per version, tagged v<version>, carrying the APK and binaries. The workspace shares
+# one version, so every crate bumps together; library crates get changelogs but no tags or releases of
+# their own (Obtainium and humans see a single release stream).
 [workspace]
 changelog_update = true
-git_release_enable = true
+git_release_enable = false
+git_tag_enable = false
 # Flip to true once a CARGO_REGISTRY_TOKEN secret is configured for crates.io.
 publish = false
 semver_check = true
+
+[[package]]
+name = "hblctl"
+git_release_enable = true
+git_tag_enable = true
+git_tag_name = "v{{ version }}"
+git_release_name = "v{{ version }}"
