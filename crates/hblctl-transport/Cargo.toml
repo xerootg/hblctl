@@ -1,0 +1,22 @@
+[package]
+name = "hblctl-transport"
+description = "Transports for hblctl: TCP, scripted mock, and a recording layer that captures every socket byte for replay."
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+hblctl-proto = { path = "../hblctl-proto", version = "0.1.0" }
+thiserror = "2"
+tokio = { version = "1", features = ["net", "io-util", "time", "sync", "rt", "macros"] }
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["net", "io-util", "time", "sync", "rt-multi-thread", "macros"] }
+tempfile = "3"
+proptest = "1"
