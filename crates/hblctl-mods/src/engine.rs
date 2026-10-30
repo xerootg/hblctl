@@ -11,12 +11,7 @@ use crate::{
 use hblctl_core::safety::{Policy, Safety};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{
-    collections::BTreeSet,
-    fs::{self, File as HostFile},
-    io::Write,
-    path::Path,
-};
+use std::{collections::BTreeSet, fs, io::Write, path::Path};
 
 /// Comparison of observed camera bytes and transaction evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
