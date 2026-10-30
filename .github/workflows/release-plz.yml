@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       releases_created: ${{ steps.rp.outputs.releases_created }}
-      tag: ${{ fromJSON(steps.rp.outputs.releases || '[{}]')[0].tag }}
+      tag: ${{ steps.tag.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -47,12 +47,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      # `releases` lists every workspace package; only the hblctl package has a git tag and release.
+      - id: tag
+        run: echo "tag=$(jq -r '.[] | select(.package_name == "hblctl") | .tag // empty' <<< "$RELEASES")" >> "$GITHUB_OUTPUT"
+        env:
+          RELEASES: ${{ steps.rp.outputs.releases || '[]' }}
 
   # Releases made with GITHUB_TOKEN do not trigger other workflows, so the APK job is called directly.
   apk:
     name: release APK
     needs: release
-    if: needs.release.outputs.releases_created == 'true'
+    if: needs.release.outputs.releases_created == 'true' && needs.release.outputs.tag != ''
     uses: ./.github/workflows/android-release.yml
     with:
       tag: ${{ needs.release.outputs.tag }}
