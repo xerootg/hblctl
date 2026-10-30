@@ -103,6 +103,7 @@ jobs:
       - run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-35' 'build-tools;35.0.0' 'ndk;29.0.14206865'
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
       # Gradle version comes from android/gradle/wrapper (pinned to 9.0.0; AGP 8.13 needs <= 9.5).
       - uses: gradle/actions/setup-gradle@v4
       - uses: Swatinem/rust-cache@v2
@@ -110,8 +111,6 @@ jobs:
       - run: cargo fetch --locked
       - run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
         working-directory: android
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/29.0.14206865
       - uses: actions/upload-artifact@v4
         with:
           name: hblctl-debug-apk
