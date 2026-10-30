@@ -252,7 +252,7 @@ mod tests {
         assert_eq!(out.progress, vec![-5]);
         assert_eq!(out.notifications.len(), 1);
         assert_eq!(out.result.u32_at(0x18).unwrap(), 6);
-        assert!(out.stray.is_empty());
+        assert_eq!(out.stray, vec![]);
         assert!(c.transport().finished());
     }
 

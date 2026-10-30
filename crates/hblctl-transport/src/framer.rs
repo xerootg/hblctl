@@ -88,8 +88,8 @@ mod tests {
         let (a, b) = (frame(1), frame(2));
         let bytes = [a.encode(), b.encode()].concat();
         let mut f = Framer::new();
-        assert!(f.push(&bytes[..3]).is_empty());
-        assert!(f.push(&bytes[3..200]).is_empty());
+        assert_eq!(f.push(&bytes[..3]), vec![]);
+        assert_eq!(f.push(&bytes[3..200]), vec![]);
         assert_eq!(frames(f.push(&bytes[200..])), vec![a, b]);
         assert_eq!(f.pending(), 0);
     }
