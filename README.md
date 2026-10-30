@@ -75,11 +75,11 @@ source or downloads patch tools. A pinned JSON Schema and semantic checks valida
 references, dependency cycles, ordered steps, literal paths, artifact hashes and
 `byte-edits-v1` recipes. Loading requires a companion `<bundle>.sha256` sidecar and
 an exact archive inventory. SHA-256 detects corruption; it does not authenticate a
-publisher. The preview in `reference/` is blocked and cannot authorize changes;
+publisher. The current toolkit preview bundle is marked blocked and cannot authorize changes;
 its loading test pins the locally supplied fixture checksum.
 
 ```
-hblctl mods load reference/x2d-toolkit-bundle-0.1.0-preview.1.tar.zst
+hblctl mods load x2d-toolkit-bundle-<version>.tar.zst   # with its .sha256 sidecar beside it
 hblctl --allow destructive mods plan bundle.tar.zst --via adb afc
 hblctl --allow destructive mods apply bundle.tar.zst --via adb afc        # dry run
 hblctl --allow destructive mods apply bundle.tar.zst --via adb afc --go
