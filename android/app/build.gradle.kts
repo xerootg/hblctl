@@ -6,6 +6,18 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
 }
+
+// Read `[workspace.package] version = "x.y.z"` from the repository's Cargo.toml.
+val workspaceVersion: String = run {
+    val cargo = rootProject.projectDir.parentFile.resolve("Cargo.toml").readText()
+    val section = cargo.substringAfter("[workspace.package]")
+    Regex("""(?m)^version\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"""").find(section)?.groupValues?.get(1)
+        ?: error("workspace.package.version not found in Cargo.toml")
+}
+val workspaceVersionCode: Int = workspaceVersion.split(".").map { it.toInt() }.let { (major, minor, patch) ->
+    major * 1_000_000 + minor * 1_000 + patch
+}
+
 android {
     namespace = "org.hblctl.android"
     compileSdk = 35
@@ -14,8 +26,10 @@ android {
         applicationId = "org.hblctl.android"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        // The app carries the workspace version from Cargo.toml so releases, APK names and the
+        // Android versionCode (which must increase for in-place updates) all move together.
+        versionName = workspaceVersion
+        versionCode = workspaceVersionCode
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
     buildFeatures { compose = true }
