@@ -122,7 +122,7 @@ impl Registry {
             .ok_or_else(|| Error::Arguments {
                 detail: format!("unknown operation {command}.{func}"),
             })?;
-        Ok(registry::input_schema(f).to_string())
+        Ok(registry::input_schema_with_tables(&self.inner, f).to_string())
     }
 }
 impl Default for Registry {
@@ -474,7 +474,7 @@ mod tests {
         for (c, f) in core.operations() {
             assert_eq!(
                 registry.input_schema(c.name.clone(), f.name.clone()).unwrap(),
-                registry::input_schema(f).to_string()
+                registry::input_schema_with_tables(&registry.inner, f).to_string()
             );
         }
         assert!(registry.input_schema("missing".into(), "missing".into()).is_err());

@@ -66,6 +66,12 @@ pub struct Field {
     /// Human description.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub doc: String,
+    /// Named integer table, optionally selecting the type of a response buffer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<String>,
+    /// Response field containing the table index for this buffer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
 }
 
 impl Field {
@@ -117,6 +123,44 @@ pub struct CommandSpec {
     pub funcs: Vec<FuncSpec>,
 }
 
+/// A named integer choice and its value metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TableEntry {
+    /// Protocol property name.
+    pub name: String,
+    /// Wire selector.
+    pub value: i64,
+    /// Value encoding; unknown encodings remain hex.
+    #[serde(rename = "type")]
+    pub ty: String,
+    /// Wire encoding override, such as `utf32` or `hex` for unresolved values.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encoding: Option<String>,
+    /// Number of 32-bit cells, where known.
+    pub words: usize,
+    /// Access flags from the protocol analysis.
+    pub access: String,
+    /// Description and known limitations.
+    pub doc: String,
+    /// Settings keys.
+    pub settings_keys: Vec<String>,
+}
+
+impl TableEntry {
+    /// Frontend spelling of the protocol property name.
+    #[must_use]
+    pub fn alias(&self) -> String {
+        let mut out = String::new();
+        for (i, c) in self.name.chars().enumerate() {
+            if i > 0 && c.is_uppercase() {
+                out.push('-');
+            }
+            out.extend(c.to_lowercase());
+        }
+        out
+    }
+}
+
 /// A whole registry file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Registry {
@@ -124,6 +168,9 @@ pub struct Registry {
     pub target: String,
     /// Commands.
     pub commands: Vec<CommandSpec>,
+    /// Named tables available to arguments and dependent response values.
+    #[serde(default)]
+    pub tables: std::collections::BTreeMap<String, Vec<TableEntry>>,
 }
 
 /// The registry for the original Hasselblad X2D 100C on firmware 4.2.0, built into the crate.
@@ -154,6 +201,22 @@ impl Registry {
 
     /// Check names are unique and every field fits the data region without overlapping its neighbours.
     pub fn validate(&self) -> Result<(), Invalid> {
+        for (name, entries) in &self.tables {
+            if name.is_empty() || entries.is_empty() {
+                return Err(Invalid("table needs a name and entries".into()));
+            }
+            let mut names = std::collections::HashSet::new();
+            let mut values = std::collections::HashSet::new();
+            for e in entries {
+                if e.name.is_empty() || !names.insert(e.name.clone()) || !values.insert(e.value) {
+                    return Err(Invalid(format!("table {name}: duplicate or empty name/value")));
+                }
+                let alias = e.alias();
+                if alias != e.name && !names.insert(alias) {
+                    return Err(Invalid(format!("table {name}: ambiguous alias")));
+                }
+            }
+        }
         let mut names = std::collections::HashSet::new();
         for c in &self.commands {
             if !names.insert(&c.name) {
@@ -166,6 +229,39 @@ impl Registry {
                 }
                 for (side, fields) in [("request", &f.request), ("response", &f.response)] {
                     check_layout(&format!("{}.{} {side}", c.name, f.name), fields)?;
+                    for fld in fields {
+                        if let Some(name) = &fld.table {
+                            let entries = self
+                                .tables
+                                .get(name)
+                                .ok_or_else(|| Invalid(format!("unknown table {name}")))?;
+                            let ty = if let Some(selector) = &fld.selector {
+                                if fld.ty != FieldType::Bytes {
+                                    return Err(Invalid("table value must be bytes".into()));
+                                }
+                                fields
+                                    .iter()
+                                    .find(|x| &x.name == selector)
+                                    .ok_or_else(|| Invalid("missing table selector".into()))?
+                                    .ty
+                            } else {
+                                fld.ty
+                            };
+                            let (lo, hi) = match ty {
+                                FieldType::U8 => (0, i128::from(u8::MAX)),
+                                FieldType::U16 => (0, i128::from(u16::MAX)),
+                                FieldType::U32 => (0, i128::from(u32::MAX)),
+                                FieldType::U64 => (0, i128::from(u64::MAX)),
+                                FieldType::S32 => (i128::from(i32::MIN), i128::from(i32::MAX)),
+                                _ => return Err(Invalid("table selector must be integer".into())),
+                            };
+                            if entries.iter().any(|e| !(lo..=hi).contains(&i128::from(e.value))) {
+                                return Err(Invalid(format!("table {name}: value out of range")));
+                            }
+                        } else if fld.selector.is_some() {
+                            return Err(Invalid("selector needs table".into()));
+                        }
+                    }
                 }
             }
         }
@@ -250,6 +346,26 @@ pub fn input_schema(f: &FuncSpec) -> Value {
         props.insert(fld.name.clone(), s);
     }
     json!({"type": "object", "properties": props, "required": required, "additionalProperties": false})
+}
+
+/// Argument schema including named table choices and integer selectors.
+#[must_use]
+pub fn input_schema_with_tables(registry: &Registry, f: &FuncSpec) -> Value {
+    let mut schema = input_schema(f);
+    for fld in &f.request {
+        if let Some(entries) = fld.table.as_ref().and_then(|t| registry.tables.get(t)) {
+            let names: std::collections::BTreeSet<String> =
+                entries.iter().flat_map(|e| [e.name.clone(), e.alias()]).collect();
+            let mut integer = schema["properties"][&fld.name].clone();
+            integer["enum"] = json!(entries.iter().map(|e| e.value).collect::<Vec<_>>());
+            schema["properties"][&fld.name] =
+                json!({"anyOf": [integer, {"type": "string", "enum": names}], "description": fld.doc});
+            if let Some(default) = &fld.default {
+                schema["properties"][&fld.name]["default"] = default.clone();
+            }
+        }
+    }
+    schema
 }
 
 #[cfg(test)]

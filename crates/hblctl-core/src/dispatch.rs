@@ -47,7 +47,7 @@ pub async fn invoke<T: Transport>(
         .ok_or_else(|| DispatchError::Unknown(format!("{}.{func}", c.name)))?;
     let what = format!("{}.{}", c.name, f.name);
     policy.check(&what, f.safety)?;
-    let data = codec::encode(f, args)?;
+    let data = codec::encode_with_tables(registry, f, args)?;
     let args_json = Value::Object(args.clone());
     tracing::info!(target: "hblctl::op", op = %what, cmd = c.id, func = f.func, args = %args_json, "invoke");
     let out = client.call(c.id, f.func, &data).await?;
@@ -59,7 +59,7 @@ pub async fn invoke<T: Transport>(
     let result = json!({
         "operation": what,
         "status": status,
-        "fields": codec::decode(f, &out.result),
+        "fields": codec::decode_with_tables(registry, f, &out.result),
         "progress": out.progress,
         "notifications": out.notifications.iter().map(|n| crate::hex(&n.encode())).collect::<Vec<_>>(),
         "stray_frames": out.stray.len(),

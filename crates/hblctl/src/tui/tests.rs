@@ -160,7 +160,7 @@ fn every_builtin_form_comes_from_its_schema() {
     let registry = hblctl_core::registry::builtin();
     let mut app = App::new(registry.clone(), Policy::default());
     for (_, spec) in registry.operations() {
-        let schema = hblctl_core::registry::input_schema(spec);
+        let schema = hblctl_core::registry::input_schema_with_tables(&app.registry, spec);
         assert_eq!(app.fields.len(), spec.request.len());
         for field in &app.fields {
             assert_eq!(field.schema, schema["properties"][&field.name]);
@@ -215,6 +215,7 @@ fn text_and_byte_lengths_and_integer_boundaries_are_validated() {
 fn empty_registry_and_no_filter_matches_are_safe() {
     let mut app = App::new(
         Registry {
+            tables: std::collections::BTreeMap::default(),
             target: "empty".into(),
             commands: vec![],
         },
@@ -296,4 +297,20 @@ fn blocked_rows_are_grey_and_explain_the_ceiling() {
             .iter()
             .any(|cell| cell.symbol() == "w" && cell.fg == Color::DarkGray)
     );
+}
+
+#[test]
+fn production_form_offers_and_accepts_names() {
+    let mut app = App::new(hblctl_core::registry::builtin(), Policy::default());
+    for c in "prod-config.get".chars() {
+        app.update(Event::Text(c));
+    }
+    assert_eq!(app.fields.len(), 1);
+    let choices = app.fields[0].schema["anyOf"][1]["enum"].as_array().unwrap();
+    assert!(choices.contains(&serde_json::json!("wifi-region")));
+    app.update(Event::Tab);
+    for c in "wifi-region".chars() {
+        app.update(Event::Text(c));
+    }
+    assert!(matches!(app.update(Event::Run), Some(Effect::Invoke(_))));
 }

@@ -161,6 +161,27 @@ fn form(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 kind.push_str(" (hex pairs)");
             }
             lines.push(Line::from(kind));
+            if let Some(names) = f.schema["anyOf"][1]["enum"].as_array() {
+                lines.push(Line::from("integer or name (type to filter):"));
+                let mut choices = String::new();
+                let width = usize::from(area.width.saturating_sub(6));
+                for name in names
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .filter(|name| f.value.is_empty() || name.contains(&f.value))
+                {
+                    if !choices.is_empty() && choices.len() + name.len() + 2 > width {
+                        lines.push(Line::from(std::mem::take(&mut choices)));
+                    }
+                    if !choices.is_empty() {
+                        choices.push_str(", ");
+                    }
+                    choices.push_str(name);
+                }
+                if !choices.is_empty() {
+                    lines.push(Line::from(choices));
+                }
+            }
             if let Some(default) = f.schema.get("default") {
                 lines.push(Line::from(format!("default: {default}")));
             }
