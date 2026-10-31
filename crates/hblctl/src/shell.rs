@@ -98,6 +98,7 @@ mod tests {
     use std::process::{Command, Stdio};
 
     #[test]
+    #[cfg(unix)] // runs the prepared script through the local /bin/sh
     fn scripts_are_read_before_execution_and_keep_exit_status() {
         let (start, text) = prepare_script("printf '%s\\n' 'é'; exit 7\nignored\n".into());
         assert!(start.len() <= 231);
