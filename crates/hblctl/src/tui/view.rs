@@ -94,31 +94,54 @@ pub(crate) fn result_window(result: &str, scroll: usize, width: u16, height: usi
     if width == 0 || height == 0 {
         return String::new();
     }
-    let mut rows = Vec::new();
+    let mut output = String::new();
+    let mut row_index = 0usize;
+    let mut emitted = 0;
+    let mut emit = |row: &str| {
+        if row_index >= scroll {
+            if emitted > 0 {
+                output.push('\n');
+            }
+            output.push_str(row);
+            emitted += 1;
+        }
+        row_index = row_index.saturating_add(1);
+        emitted == height
+    };
+    // Reuse one scratch row while skipping, retaining the last row so an offset
+    // past the end still displays the tail. Only the visible window is collected.
+    let mut row = String::new();
     for line in result.lines() {
+        row.clear();
         let span = Span::raw(line);
-        let mut row = String::new();
         let mut used = 0;
         for grapheme in span.styled_graphemes(Style::default()) {
+            #[cfg(test)]
+            GRAPHEMES_VISITED.with(|count| count.set(count.get() + 1));
             let size = Span::raw(grapheme.symbol).width();
             if size > usize::from(width) {
                 continue;
             }
             if used + size > usize::from(width) {
-                rows.push(std::mem::take(&mut row));
+                if emit(&row) {
+                    return output;
+                }
+                row.clear();
                 used = 0;
             }
             row.push_str(grapheme.symbol);
             used += size;
         }
-        rows.push(row);
+        if emit(&row) {
+            return output;
+        }
     }
-    let skip = scroll.min(rows.len().saturating_sub(1));
-    rows.into_iter()
-        .skip(skip)
-        .take(height)
-        .collect::<Vec<_>>()
-        .join("\n")
+    if emitted == 0 { row } else { output }
+}
+
+#[cfg(test)]
+thread_local! {
+    static GRAPHEMES_VISITED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn block(title: &str, active: bool) -> Block<'_> {
@@ -238,4 +261,22 @@ fn form(frame: &mut Frame<'_>, app: &App, area: Rect) {
         area,
         &mut state,
     );
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+
+    #[test]
+    fn multi_mib_narrow_window_stops_at_visible_rows_and_reaches_tail() {
+        let result = format!("{}\nexit_status: 0", "x".repeat(4 * 1024 * 1024));
+        GRAPHEMES_VISITED.with(|count| count.set(0));
+        assert_eq!(result_window(&result, 0, 2, 3), "xx\nxx\nxx");
+        GRAPHEMES_VISITED.with(|count| assert!(count.get() <= 8, "visited {} graphemes", count.get()));
+        assert_eq!(
+            result_window(&result, 2 * 1024 * 1024, 2, 20),
+            "ex\nit\n_s\nta\ntu\ns:\n 0"
+        );
+        assert_eq!(result_window(&result, usize::MAX, 2, 3), " 0");
+    }
 }
