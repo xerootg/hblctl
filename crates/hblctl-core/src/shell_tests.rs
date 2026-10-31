@@ -266,7 +266,11 @@ async fn client_can_be_reused_only_after_completion() {
 
 #[tokio::test]
 async fn dispatcher_refuses_empty_shell_before_send() {
-    let mut c = Client::new(MockTransport::new([]), Duration::from_secs(1), 1);
+    let mut c = Client::new(
+        MockTransport::new([Step::Expect(req(1, 1, b"true")), Step::Reply(reply(1, 2, b"", 0))]),
+        Duration::from_secs(1),
+        1,
+    );
     let result = dispatch::invoke(
         &mut c,
         &registry::builtin(),
@@ -278,10 +282,15 @@ async fn dispatcher_refuses_empty_shell_before_send() {
     .await;
     assert!(matches!(
         result,
-        Err(dispatch::DispatchError::Client(client::ClientError::ShellInput(
-            _
-        )))
+        Err(dispatch::DispatchError::Args(codec::ArgError::Invalid { .. }))
     ));
+    assert!(!c.shell_active());
+    let mut shell = c
+        .start_shell(Policy::up_to(Safety::Destructive), "true")
+        .await
+        .unwrap();
+    assert_eq!(shell.wait().await.unwrap(), 0);
+    drop(shell);
     assert!(c.transport().finished());
 }
 
@@ -306,12 +315,10 @@ async fn short_script_is_one_complete_initial_record_with_no_eof_injection() {
 }
 
 #[tokio::test]
-async fn explicit_signals_keep_byte_exact_records() {
+async fn explicit_signals_are_refused_without_records() {
     let mut c = Client::new(
         MockTransport::new([
             Step::Expect(req(1, 1, b"sleep 60")),
-            Step::Expect(req(1, 2, &[3])),
-            Step::Expect(req(5, 3, b"")),
             Step::Reply(reply(1, 100, b"", 1)),
         ]),
         Duration::from_secs(1),
@@ -321,9 +328,69 @@ async fn explicit_signals_keep_byte_exact_records() {
         .start_shell(Policy::up_to(Safety::Destructive), "sleep 60")
         .await
         .unwrap();
-    shell.interrupt().await.unwrap();
-    shell.kill().await.unwrap();
+    assert!(shell.interrupt().await.is_err());
+    assert!(shell.kill().await.is_err());
     assert_eq!(shell.wait().await.unwrap(), 1);
     drop(shell);
+    assert!(c.transport().finished());
+}
+
+#[tokio::test]
+async fn buffered_completion_cannot_outlive_deadline() {
+    let mut c = Client::new(
+        MockTransport::new([
+            Step::Expect(req(1, 1, b"true")),
+            Step::Reply(
+                [
+                    reply(4, 2, b"first", 0),
+                    reply(4, 3, b"tail", 0),
+                    reply(1, 4, b"", 0),
+                ]
+                .concat(),
+            ),
+        ]),
+        Duration::from_millis(20),
+        1,
+    );
+    let mut shell = c
+        .start_shell(Policy::up_to(Safety::Destructive), "true")
+        .await
+        .unwrap();
+    assert_eq!(shell.next_output().await.unwrap().unwrap(), b"first");
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(matches!(
+        shell.wait().await,
+        Err(client::ClientError::Timeout { .. })
+    ));
+}
+
+#[tokio::test]
+async fn dispatcher_caps_output_and_drains_through_completion() {
+    let count = shell::OUTPUT_LIMIT / 232 + 2;
+    let steps = std::iter::once(Step::Expect(req(1, 1, b"true")))
+        .chain((0..count).map(|_| Step::Reply(reply(4, 9, &[b'x'; 232], 0))))
+        .chain(std::iter::once(Step::Reply(reply(1, 9, b"", 0))));
+    let mut c = Client::new(MockTransport::new(steps), Duration::from_secs(10), 1);
+    let result = dispatch::invoke(
+        &mut c,
+        &registry::builtin(),
+        Policy::up_to(Safety::Destructive),
+        "hbl-shell",
+        "start-shell",
+        serde_json::json!({"command_utf8_z":"true"}).as_object().unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        result["output"].as_str().unwrap(),
+        "x".repeat(shell::OUTPUT_LIMIT)
+    );
+    assert_eq!(
+        result["output_hex"].as_str().unwrap(),
+        "78".repeat(shell::OUTPUT_LIMIT)
+    );
+    assert_eq!(result["truncated"], true);
+    assert_eq!(result["exit_status"], 0);
+    assert!(!c.shell_active());
     assert!(c.transport().finished());
 }

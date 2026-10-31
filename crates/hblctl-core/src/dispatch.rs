@@ -55,9 +55,11 @@ pub async fn invoke<T: Transport>(
             .unwrap_or("")
             .trim_end_matches('\0');
         if command.is_empty() {
-            return Err(
-                ClientError::ShellInput("non-interactive shell command must not be empty".into()).into(),
-            );
+            return Err(ArgError::Invalid {
+                name: "command_utf8_z".into(),
+                why: "non-interactive shell command must not be empty".into(),
+            }
+            .into());
         }
         let mut shell = client
             .start_shell_with_delay(
@@ -66,13 +68,13 @@ pub async fn invoke<T: Transport>(
                 u32::from_le_bytes([data[0], data[1], data[2], data[3]]),
             )
             .await?;
-        let mut output = Vec::new();
+        let mut output = crate::shell::OutputCapture::default();
         while let Some(bytes) = shell.next_output().await? {
-            output.extend(bytes);
+            output.push(&bytes);
         }
         let exit_status = shell.wait().await?;
         return Ok(
-            json!({"operation": what, "output": String::from_utf8_lossy(&output), "output_hex": crate::hex(&output), "exit_status": exit_status}),
+            json!({"operation": what, "output": String::from_utf8_lossy(&output.bytes), "output_hex": crate::hex(&output.bytes), "truncated": output.truncated, "exit_status": exit_status}),
         );
     }
     let out = client.call(c.id, f.func, &data).await?;

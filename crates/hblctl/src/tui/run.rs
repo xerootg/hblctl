@@ -66,24 +66,39 @@ pub(crate) fn run(
                 }
                 match effect {
                     Effect::Invoke(call) => {
-                        let result = if call.command == "hbl-shell" {
+                        let is_shell = call.command == "hbl-shell";
+                        let result = if is_shell {
                             let result: anyhow::Result<Value> = async {
-                                let command = call.args.get("command_utf8_z").and_then(Value::as_str).unwrap_or("");
-                                anyhow::ensure!(!command.is_empty(), "non-interactive shell command must not be empty");
-                                let spec = registry.command(&call.command).and_then(|c| c.func(&call.func)).ok_or_else(|| anyhow::anyhow!("unknown shell operation"))?;
+                                let command = call
+                                    .args
+                                    .get("command_utf8_z")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("");
+                                anyhow::ensure!(
+                                    !command.is_empty(),
+                                    "non-interactive shell command must not be empty"
+                                );
+                                let spec = registry
+                                    .command(&call.command)
+                                    .and_then(|c| c.func(&call.func))
+                                    .ok_or_else(|| anyhow::anyhow!("unknown shell operation"))?;
                                 let data = hblctl_core::codec::encode(spec, &call.args)?;
                                 let delay = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
-                                let mut shell = client.as_mut().expect("connected").start_shell_with_delay(policy, command, delay).await?;
-                                let mut output = Vec::new();
+                                let mut shell = client
+                                    .as_mut()
+                                    .expect("connected")
+                                    .start_shell_with_delay(policy, command, delay)
+                                    .await?;
+
                                 let mut decoder = ShellDecoder::default();
                                 while let Some(bytes) = shell.next_output().await? {
                                     let chunk = decoder.push(&bytes, false);
-                                    output.extend(bytes);
                                     let _ = events.send(Event::ShellOutput(chunk));
                                 }
                                 let _ = events.send(Event::ShellOutput(decoder.push(&[], true)));
-                                Ok(serde_json::json!({"output":String::from_utf8_lossy(&output),"exit_status":shell.wait().await?}))
-                            }.await;
+                                Ok(serde_json::json!({"exit_status":shell.wait().await?}))
+                            }
+                            .await;
                             result.map_err(|e| e.to_string())
                         } else {
                             invoke(client.as_mut().expect("connected"), &registry, policy, call).await
@@ -94,7 +109,11 @@ pub(crate) fn run(
                             client = None;
                             let _ = events.send(Event::Connection("disconnected (operation failed)".into()));
                         }
-                        let _ = events.send(Event::Completed(result));
+                        let _ = events.send(if is_shell {
+                            Event::ShellCompleted(result)
+                        } else {
+                            Event::Completed(result)
+                        });
                     }
                     Effect::Reconnect => {
                         let _ = events.send(Event::Completed(Ok(
@@ -245,5 +264,19 @@ mod tests {
         app.update(Event::ShellOutput("a".into()));
         app.update(Event::ShellOutput("é".into()));
         assert_eq!(app.result, "aé");
+    }
+    #[test]
+    fn shell_completion_preserves_lines_and_errors() {
+        let mut app = App::new(hblctl_core::registry::builtin(), Policy::default());
+        app.update(Event::ShellOutput("one\ntwo\n".into()));
+        app.update(Event::ShellCompleted(Ok(serde_json::json!({"exit_status":0}))));
+        assert!(app.result.starts_with("one\ntwo\n"));
+        app.update(Event::ShellCompleted(Err("timeout".into())));
+        assert!(app.result.starts_with("one\ntwo\n"));
+        assert!(app.result.contains("timeout"));
+        app.update(Event::ShellOutput(
+            "x".repeat(hblctl_core::shell::OUTPUT_LIMIT + 10),
+        ));
+        assert!(app.result.len() <= hblctl_core::shell::OUTPUT_LIMIT + 256);
     }
 }

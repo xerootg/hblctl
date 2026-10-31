@@ -158,14 +158,17 @@ by the session API, including multi-record scripts. Scripts must fit in the init
 231-byte UTF-8 command record and execute with `/bin/sh -c`. No pacing assumption
 or TCP write boundary is used for uploads. The protocol has no stdin-close indication:
 EOF cannot be forwarded, and the CLI never injects `exit` text. ETX is rejected as
-stdin data; `interrupt()` is the explicit SIGINT API. MCP discards unfinished shell
-connections and reconnects on the next tool call.
+stdin data. `interrupt()` and `kill()` are unavailable: control records cannot be
+distinguished from starts or reliably delivered by the bridge. Ctrl-C ends the local
+session and discards the connection; it cannot stop the remote child. Reconnect
+after an unfinished session. The whole-session timeout also bounds waits for stdout.
+The firmware returns only success/failure, not the child's numeric exit code.
 
-Shell output streams as raw received bytes; Ctrl-C sends SIGINT to the immediate
-child. The session exclusively owns the connection until completion. `--timeout`
-bounds the entire shell session. The firmware returns only success/failure, so the
-CLI exits 0/1; it cannot reproduce a child's numeric exit code. Firmware may damage
-non-ASCII output or lose large final drains; captures retain the bytes received.
+Dispatcher and MCP captures retain at most 4 MiB of raw output and report
+`truncated: true` when discarding excess bytes, while continuing to drain.
+The TUI retains at most 4 MiB of decoded output plus a truncation marker and
+completion status. Its streamed lines remain visible after completion or errors.
+
 The TUI's `hbl-shell.start-shell` form streams into its result pane. MCP exposes
 `shell__run` only with the destructive ceiling, returning output, raw output hex,
 and wire exit status. Command 52 runs one executable without arguments; command 73

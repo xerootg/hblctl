@@ -58,9 +58,6 @@ impl<T: Transport> Client<T> {
     }
 }
 impl<T: Transport> ShellSession<'_, T> {
-    async fn send(&mut self, func: u32, bytes: &[u8]) -> Result<(), ClientError> {
-        self.send_record(func, bytes, 0).await
-    }
     async fn send_record(&mut self, func: u32, bytes: &[u8], delay: u32) -> Result<(), ClientError> {
         if self.status.is_some() {
             return Err(ClientError::ShellInput("shell has completed".into()));
@@ -89,10 +86,10 @@ impl<T: Transport> ShellSession<'_, T> {
     }
     /// Reject stdin uploads: the bridge has no framing or acknowledgement for them.
     /// Use a complete command in the initial request instead. ETX is a signal,
-    /// available explicitly through `interrupt()`, never stdin data.
+    /// unsupported along with other control records, never stdin data.
     pub fn write_stdin(&mut self, text: &str) -> std::future::Ready<Result<(), ClientError>> {
         let reason = if text.contains('\x03') {
-            "stdin contains ETX; use interrupt() for SIGINT"
+            "stdin contains ETX; shell controls are unavailable"
         } else if text.contains('\0') {
             "stdin contains NUL"
         } else {
@@ -100,13 +97,22 @@ impl<T: Transport> ShellSession<'_, T> {
         };
         std::future::ready(Err(ClientError::ShellInput(reason.into())))
     }
-    /// Send SIGINT to the child PID (not its process group).
-    pub async fn interrupt(&mut self) -> Result<(), ClientError> {
-        self.send(1, &[3]).await
+    /// Unavailable: the bridge cannot distinguish or acknowledge control records safely.
+    pub fn interrupt(&mut self) -> std::future::Ready<Result<(), ClientError>> {
+        std::future::ready(Err(ClientError::ShellInput(
+            "interrupt unavailable: unsafe bridge control framing; reconnect after timeout".into(),
+        )))
     }
-    /// Send SIGKILL to the child PID; wait for the eventual original result.
-    pub async fn kill(&mut self) -> Result<(), ClientError> {
-        self.send(5, &[]).await
+    /// Unavailable for the same framing and delivery reasons as `interrupt()`.
+    pub fn kill(&mut self) -> std::future::Ready<Result<(), ClientError>> {
+        std::future::ready(Err(ClientError::ShellInput(
+            "kill unavailable: unsafe bridge control framing; reconnect after timeout".into(),
+        )))
+    }
+    /// The absolute deadline, including time spent writing output to a sink.
+    #[must_use]
+    pub fn deadline(&self) -> tokio::time::Instant {
+        self.deadline
     }
     /// Receive the next output notification, preserving bytes up to the first NUL.
     /// Empty drain records are output, not EOF. No cookie matching is performed.
@@ -115,6 +121,9 @@ impl<T: Transport> ShellSession<'_, T> {
         loop {
             if self.status.is_some() {
                 return Ok(None);
+            }
+            if tokio::time::Instant::now() >= self.deadline {
+                return Err(self.timeout());
             }
             if let Some(frame) = self.pending.pop_front() {
                 tracing::debug!(target: "hblctl::proto", header = ?frame.header, record = ?frame.record, "shell receive");
@@ -161,5 +170,25 @@ impl<T> Drop for ShellSession<'_, T> {
         // A cancelled or abandoned session cannot release the connection for commands:
         // the camera may still route them into the shell. Only completion releases it.
         self.client.shell_active = self.status.is_none();
+    }
+}
+
+/// Maximum retained shell output in dispatcher, MCP and TUI results (4 MiB).
+pub const OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
+
+/// Bounded raw shell capture. Excess bytes are discarded while the session drains.
+#[derive(Default)]
+pub struct OutputCapture {
+    /// Retained prefix of raw output.
+    pub bytes: Vec<u8>,
+    /// Whether any output was discarded.
+    pub truncated: bool,
+}
+impl OutputCapture {
+    /// Retain at most the configured output limit.
+    pub fn push(&mut self, bytes: &[u8]) {
+        let n = bytes.len().min(OUTPUT_LIMIT - self.bytes.len());
+        self.bytes.extend_from_slice(&bytes[..n]);
+        self.truncated |= n < bytes.len();
     }
 }

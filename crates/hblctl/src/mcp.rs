@@ -129,9 +129,9 @@ impl<T: Transport + Send + Sync + 'static> McpServer<T> {
                 let command = args.get("command").and_then(Value::as_str).ok_or_else(|| anyhow::anyhow!("expected command string"))?;
                 anyhow::ensure!(!command.is_empty(), "non-interactive shell command must not be empty");
                 let mut session = client.start_shell(self.policy, command).await?;
-                let mut output = Vec::new();
-                while let Some(bytes) = session.next_output().await? { output.extend(bytes); }
-                return Ok(serde_json::json!({"output": String::from_utf8_lossy(&output), "output_hex": hblctl_core::hex(&output), "exit_status": session.wait().await?}));
+                let mut output = hblctl_core::shell::OutputCapture::default();
+                while let Some(bytes) = session.next_output().await? { output.push(&bytes); }
+                return Ok(serde_json::json!({"output": String::from_utf8_lossy(&output.bytes), "output_hex": hblctl_core::hex(&output.bytes), "truncated": output.truncated, "exit_status": session.wait().await?}));
             }
             let (c, f) = route(name).ok_or_else(|| anyhow::anyhow!("unknown tool {name}"))?;
             Ok(invoke(client, &self.registry, self.policy, c, f, &args).await?)
@@ -421,5 +421,61 @@ mod tests {
         let refused = server.call("prod-config__set", args).await;
         assert_eq!(refused.is_error, Some(true));
         assert_eq!(server.call("nonsense", Map::new()).await.is_error, Some(true));
+    }
+    #[tokio::test]
+    async fn shell_capture_is_bounded_and_drained() {
+        let mut request = Sutest::new(65, 1, 1);
+        request.data[4..8].copy_from_slice(b"true");
+        let frame = |func, bytes: &[u8]| {
+            let mut record = Sutest::new(65, func, 9);
+            record.data[4..4 + bytes.len()].copy_from_slice(bytes);
+            BusFrame {
+                header: BusHeader {
+                    signal: SIGNAL_TEST_TX,
+                    origin: NODE_EAGLE,
+                    dest: NODE_TCP_HOST,
+                    kind: TYPE_SUTEST,
+                },
+                record,
+            }
+            .encode_reply_message()
+        };
+        let count = hblctl_core::shell::OUTPUT_LIMIT / 232 + 2;
+        let steps = std::iter::once(Step::Expect(BusFrame::command(request).encode()))
+            .chain((0..count).map(|_| Step::Reply(frame(4, &[b'x'; 232]))))
+            .chain(std::iter::once(Step::Reply(frame(1, &[]))));
+        let server = McpServer::new(
+            Client::new(MockTransport::new(steps), Duration::from_secs(10), 1),
+            hblctl_core::registry::builtin(),
+            Policy::up_to(Safety::Destructive),
+        );
+        let result = server
+            .call(
+                "shell__run",
+                serde_json::json!({"command":"true"}).as_object().unwrap().clone(),
+            )
+            .await;
+        assert_eq!(result.is_error, Some(false));
+        let text = result.content[0].as_text().unwrap();
+        let value: Value = serde_json::from_str(&text.text).unwrap();
+        assert_eq!(value["truncated"], true);
+        assert_eq!(
+            value["output"].as_str().unwrap().len(),
+            hblctl_core::shell::OUTPUT_LIMIT
+        );
+        assert_eq!(
+            value["output_hex"].as_str().unwrap().len(),
+            2 * hblctl_core::shell::OUTPUT_LIMIT
+        );
+        assert!(
+            server
+                .client
+                .lock()
+                .await
+                .as_ref()
+                .unwrap()
+                .transport()
+                .finished()
+        );
     }
 }

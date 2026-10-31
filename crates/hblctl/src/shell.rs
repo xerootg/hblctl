@@ -32,18 +32,51 @@ pub(crate) fn run(m: &ArgMatches, sm: &ArgMatches, argv: &[String]) -> Result<u8
     tokio::runtime::Runtime::new()?.block_on(async {
         let mut client = camera.connect().await?;
         let mut shell = client.start_shell(policy, &command).await?;
-        loop {
-            tokio::select! {
-                biased;
-                bytes = shell.next_output() => match bytes? {
-                    Some(bytes) => { let mut out = std::io::stdout().lock(); out.write_all(&bytes)?; out.flush()?; },
-                    None => break,
-                },
-                signal = tokio::signal::ctrl_c() => { signal?; shell.interrupt().await?; },
+        let deadline = shell.deadline();
+        let (output, chunks) = std::sync::mpsc::sync_channel::<OutputWrite>(1);
+        // Keep blocking stdout I/O off the runtime. This detached thread owns at most
+        // one wire chunk; a stalled pipe cannot prevent timeout or Ctrl-C handling.
+        std::thread::spawn(move || {
+            let mut out = std::io::stdout().lock();
+            while let Ok((bytes, done)) = chunks.recv() {
+                let result = out.write_all(&bytes).and_then(|()| out.flush());
+                let failed = result.is_err();
+                let _ = done.send(result);
+                if failed {
+                    break;
+                }
             }
-        }
+        });
+        let stream = async {
+            while let Some(bytes) = shell.next_output().await? {
+                let (done, written) = tokio::sync::oneshot::channel();
+                output.try_send((bytes, done)).context("stdout worker stopped")?;
+                written.await.context("stdout worker stopped")??;
+            }
+            anyhow::Ok(())
+        };
+        until_deadline_or_signal(stream, tokio::signal::ctrl_c(), deadline).await?;
+
         Ok(u8::from(shell.wait().await? != 0))
     })
+}
+
+type OutputWrite = (Vec<u8>, tokio::sync::oneshot::Sender<std::io::Result<()>>);
+
+async fn until_deadline_or_signal(
+    work: impl std::future::Future<Output = Result<()>>,
+    signal: impl std::future::Future<Output = std::io::Result<()>>,
+    deadline: tokio::time::Instant,
+) -> Result<()> {
+    tokio::select! {
+        biased;
+        signal = signal => {
+            signal?;
+            anyhow::bail!("interrupted; shell controls unavailable; reconnect required");
+        }
+        () = tokio::time::sleep_until(deadline) => anyhow::bail!("shell session timed out; reconnect required"),
+        result = work => result,
+    }
 }
 
 fn validate_command(command: &str) -> Result<()> {
@@ -86,5 +119,18 @@ mod tests {
             .try_get_matches_from(["shell", "--", "rm 'file name'"])
             .unwrap();
         assert_eq!(m.get_one::<String>("command").unwrap(), "rm 'file name'");
+    }
+    #[tokio::test]
+    async fn signal_wins_over_ready_output_and_stalled_sink_times_out() {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(10);
+        let result = until_deadline_or_signal(async { Ok(()) }, async { Ok(()) }, deadline).await;
+        assert!(result.unwrap_err().to_string().contains("interrupted"));
+        let (mut sink, _reader) = tokio::io::duplex(1);
+        let work = async {
+            tokio::io::AsyncWriteExt::write_all(&mut sink, b"blocked output").await?;
+            Ok(())
+        };
+        let result = until_deadline_or_signal(work, std::future::pending(), deadline).await;
+        assert!(result.unwrap_err().to_string().contains("timed out"));
     }
 }
