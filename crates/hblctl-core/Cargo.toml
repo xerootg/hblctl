@@ -11,8 +11,8 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-hblctl-proto = { path = "../hblctl-proto", version = "0.2.0" }
-hblctl-transport = { path = "../hblctl-transport", version = "0.2.0" }
+hblctl-proto = { path = "../hblctl-proto", version = "0.3.0" }
+hblctl-transport = { path = "../hblctl-transport", version = "0.3.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
