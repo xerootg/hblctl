@@ -69,35 +69,30 @@ fn reply(func: u32, cookie: u32, text: &[u8], status: u32) -> Vec<u8> {
     .encode_reply_message()
 }
 #[tokio::test]
-async fn utf8_stdin_interrupt_kill_and_arbitrary_cookies() {
-    let text = format!("{}é", "x".repeat(230));
-    let t = MockTransport::new([
-        Step::Expect(req(1, 1, b"")),
-        Step::Expect(req(1, 2, &[b'x'; 230])),
-        Step::Expect(req(1, 3, "é".as_bytes())),
-        Step::Expect(req(1, 4, &[3])),
-        Step::Expect(req(5, 5, b"")),
-        Step::Reply(
-            [
-                reply(4, 987, &[0xc3], 0),
-                reply(4, 456, &[0xa9], 0),
-                reply(1, 123, b"", 1),
-            ]
-            .concat(),
-        ),
-    ]);
-    let mut c = Client::new(t, Duration::from_secs(1), 1);
+async fn stdin_uploads_and_etx_are_refused_without_any_record() {
+    let mut c = Client::new(
+        MockTransport::new([Step::Expect(req(1, 1, b"cat")), Step::Reply(reply(1, 9, b"", 0))]),
+        Duration::from_secs(1),
+        1,
+    );
     let mut s = c
-        .start_shell(Policy::up_to(Safety::Destructive), "")
+        .start_shell(Policy::up_to(Safety::Destructive), "cat")
         .await
         .unwrap();
-    s.write_stdin(&text).await.unwrap();
-    s.interrupt().await.unwrap();
-    s.kill().await.unwrap();
-    let mut b = s.next_output().await.unwrap().unwrap();
-    b.extend(s.next_output().await.unwrap().unwrap());
-    assert_eq!(String::from_utf8(b).unwrap(), "é");
-    assert_eq!(s.wait().await.unwrap(), 1);
+    for text in [
+        "exit\nreboot\n".to_owned(),
+        format!("{}\x03", "x".repeat(231)),
+        "x\0".to_owned(),
+    ] {
+        assert!(matches!(
+            s.write_stdin(&text).await,
+            Err(client::ClientError::ShellInput(_))
+        ));
+    }
+    assert_eq!(s.wait().await.unwrap(), 0);
+    assert!(s.write_stdin("reboot\n").await.is_err());
+    assert!(s.interrupt().await.is_err());
+    assert!(s.kill().await.is_err());
     drop(s);
     assert!(c.transport().finished());
 }
@@ -266,5 +261,69 @@ async fn client_can_be_reused_only_after_completion() {
         assert_eq!(s.wait().await.unwrap(), 0);
     }
     assert_eq!(c.call(30, 0, &[]).await.unwrap().status, Status::Ok);
+    assert!(c.transport().finished());
+}
+
+#[tokio::test]
+async fn dispatcher_refuses_empty_shell_before_send() {
+    let mut c = Client::new(MockTransport::new([]), Duration::from_secs(1), 1);
+    let result = dispatch::invoke(
+        &mut c,
+        &registry::builtin(),
+        Policy::up_to(Safety::Destructive),
+        "hbl-shell",
+        "start-shell",
+        serde_json::json!({"command_utf8_z":""}).as_object().unwrap(),
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Err(dispatch::DispatchError::Client(client::ClientError::ShellInput(
+            _
+        )))
+    ));
+    assert!(c.transport().finished());
+}
+
+#[tokio::test]
+async fn short_script_is_one_complete_initial_record_with_no_eof_injection() {
+    let script = "exit\nreboot\n";
+    let mut c = Client::new(
+        MockTransport::new([
+            Step::Expect(req(1, 1, script.as_bytes())),
+            Step::Reply(reply(1, 77, b"", 0)),
+        ]),
+        Duration::from_secs(1),
+        1,
+    );
+    let mut shell = c
+        .start_shell(Policy::up_to(Safety::Destructive), script)
+        .await
+        .unwrap();
+    assert_eq!(shell.wait().await.unwrap(), 0);
+    drop(shell);
+    assert!(c.transport().finished());
+}
+
+#[tokio::test]
+async fn explicit_signals_keep_byte_exact_records() {
+    let mut c = Client::new(
+        MockTransport::new([
+            Step::Expect(req(1, 1, b"sleep 60")),
+            Step::Expect(req(1, 2, &[3])),
+            Step::Expect(req(5, 3, b"")),
+            Step::Reply(reply(1, 100, b"", 1)),
+        ]),
+        Duration::from_secs(1),
+        1,
+    );
+    let mut shell = c
+        .start_shell(Policy::up_to(Safety::Destructive), "sleep 60")
+        .await
+        .unwrap();
+    shell.interrupt().await.unwrap();
+    shell.kill().await.unwrap();
+    assert_eq!(shell.wait().await.unwrap(), 1);
+    drop(shell);
     assert!(c.transport().finished());
 }

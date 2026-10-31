@@ -28,6 +28,10 @@ pub(crate) async fn invoke<T: Transport>(
         .map_err(|e| e.to_string())
 }
 
+fn event_channel() -> (mpsc::SyncSender<Event>, Receiver<Event>) {
+    mpsc::sync_channel(64)
+}
+
 pub(crate) fn run(
     camera: CameraSession,
     registry: Registry,
@@ -36,7 +40,7 @@ pub(crate) fn run(
 ) -> Result<()> {
     let mut app = App::new(registry.clone(), policy);
     let (requests, work) = mpsc::channel();
-    let (events, updates) = mpsc::channel();
+    let (events, updates) = event_channel();
     let runtime = tokio::runtime::Runtime::new()?;
     let worker = std::thread::spawn(move || {
         runtime.block_on(async move {
@@ -65,15 +69,19 @@ pub(crate) fn run(
                         let result = if call.command == "hbl-shell" {
                             let result: anyhow::Result<Value> = async {
                                 let command = call.args.get("command_utf8_z").and_then(Value::as_str).unwrap_or("");
+                                anyhow::ensure!(!command.is_empty(), "non-interactive shell command must not be empty");
                                 let spec = registry.command(&call.command).and_then(|c| c.func(&call.func)).ok_or_else(|| anyhow::anyhow!("unknown shell operation"))?;
                                 let data = hblctl_core::codec::encode(spec, &call.args)?;
                                 let delay = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
                                 let mut shell = client.as_mut().expect("connected").start_shell_with_delay(policy, command, delay).await?;
                                 let mut output = Vec::new();
+                                let mut decoder = ShellDecoder::default();
                                 while let Some(bytes) = shell.next_output().await? {
+                                    let chunk = decoder.push(&bytes, false);
                                     output.extend(bytes);
-                                    let _ = events.send(Event::ShellOutput(String::from_utf8_lossy(&output).into_owned()));
+                                    let _ = events.send(Event::ShellOutput(chunk));
                                 }
+                                let _ = events.send(Event::ShellOutput(decoder.push(&[], true)));
                                 Ok(serde_json::json!({"output":String::from_utf8_lossy(&output),"exit_status":shell.wait().await?}))
                             }.await;
                             result.map_err(|e| e.to_string())
@@ -99,6 +107,7 @@ pub(crate) fn run(
     });
     let result = terminal_loop(&mut app, &requests, &updates, logs);
     drop(requests);
+    drop(updates); // Release a worker blocked on a full update queue after UI exit.
     // A running operation finishes and flushes its capture before process exit.
     let joined = worker
         .join()
@@ -115,7 +124,7 @@ fn terminal_loop(
     let mut terminal = ratatui::try_init().context("initializing terminal")?;
     let result = (|| {
         loop {
-            for event in updates.try_iter() {
+            for event in updates.try_iter().take(64) {
                 app.update(event);
             }
             for line in logs.try_iter() {
@@ -155,4 +164,86 @@ fn terminal_loop(
     })();
     ratatui::restore();
     result
+}
+
+// Keep only an incomplete UTF-8 suffix between output notifications.
+#[derive(Default)]
+struct ShellDecoder {
+    pending: Vec<u8>,
+}
+impl ShellDecoder {
+    fn push(&mut self, bytes: &[u8], finish: bool) -> String {
+        self.pending.extend_from_slice(bytes);
+        let mut output = String::new();
+        let mut used = 0;
+        while used < self.pending.len() {
+            match std::str::from_utf8(&self.pending[used..]) {
+                Ok(text) => {
+                    output.push_str(text);
+                    used = self.pending.len();
+                }
+                Err(e) => {
+                    let end = used + e.valid_up_to();
+                    output.push_str(std::str::from_utf8(&self.pending[used..end]).expect("valid prefix"));
+                    used = end;
+                    match e.error_len() {
+                        Some(n) => {
+                            output.push('�');
+                            used += n;
+                        }
+                        None if finish => {
+                            output.push('�');
+                            used = self.pending.len();
+                        }
+                        None => break,
+                    }
+                }
+            }
+        }
+        self.pending.drain(..used);
+        output
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_queue_is_bounded_and_chunks_stay_incremental() {
+        let (tx, rx) = event_channel();
+        let chunk = "x".repeat(232);
+        for _ in 0..64 {
+            tx.try_send(Event::ShellOutput(chunk.clone())).unwrap();
+        }
+        assert!(matches!(
+            tx.try_send(Event::ShellOutput(chunk.clone())),
+            Err(mpsc::TrySendError::Full(_))
+        ));
+        let mut app = App::new(hblctl_core::registry::builtin(), Policy::default());
+        for event in rx.try_iter() {
+            app.update(event);
+        }
+        assert_eq!(app.result, chunk.repeat(64));
+        tx.try_send(Event::ShellOutput("tail".into())).unwrap();
+        app.update(rx.recv().unwrap());
+        assert!(app.result.ends_with("tail"));
+    }
+
+    #[test]
+    fn shell_chunks_decode_utf8_incrementally() {
+        let mut decoder = ShellDecoder::default();
+        assert_eq!(decoder.push(&[b'a', 0xc3], false), "a");
+        assert_eq!(decoder.push(&[0xa9, 0xff, 0xe2], false), "é�");
+        assert_eq!(decoder.push(&[], true), "�");
+        assert!(decoder.pending.is_empty());
+    }
+
+    #[test]
+    fn shell_output_events_append_only_the_new_chunk() {
+        let mut app = App::new(hblctl_core::registry::builtin(), Policy::default());
+        app.update(Event::ShellOutput("a".into()));
+        app.update(Event::ShellOutput("é".into()));
+        assert_eq!(app.result, "aé");
+    }
 }

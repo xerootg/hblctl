@@ -148,7 +148,11 @@ fn run_camera(m: &ArgMatches, argv: &[String], reg: Registry, mcp_mode: bool) ->
         match call {
             None => {
                 use rmcp::ServiceExt as _;
-                let server = mcp::McpServer::new(client, reg, policy);
+                let camera = std::sync::Arc::new(camera);
+                let server = mcp::McpServer::new(client, reg, policy).with_reconnect(Box::new(move || {
+                    let camera = camera.clone();
+                    Box::pin(async move { camera.connect().await })
+                }));
                 let running = server
                     .serve(rmcp::transport::stdio())
                     .await

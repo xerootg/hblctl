@@ -144,7 +144,7 @@ impl App {
                     Err(e) => format!("Error: {e}"),
                 };
             }
-            Event::ShellOutput(s) => self.result = s,
+            Event::ShellOutput(s) => self.result.push_str(&s),
             Event::Connection(s) => self.connection = s,
             Event::Log(s) => {
                 self.logs.push_back(s);
@@ -252,7 +252,7 @@ impl App {
         };
         self.confirmation = None;
         self.busy = true;
-        self.result = "Running…".into();
+        self.result.clear();
         Some(Effect::Invoke(call))
     }
 }

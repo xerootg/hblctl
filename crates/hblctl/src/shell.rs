@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use clap::{Arg, ArgMatches, Command};
 use hblctl_core::{Policy, Safety};
-use std::io::{BufRead, Write};
+use std::io::Write;
 
 pub(crate) fn command() -> Command {
     Command::new("shell")
@@ -16,12 +16,7 @@ pub(crate) fn command() -> Command {
                 .value_name("FILE")
                 .conflicts_with("command"),
         )
-        .arg(
-            Arg::new("command")
-                .num_args(1..)
-                .trailing_var_arg(true)
-                .allow_hyphen_values(true),
-        )
+        .arg(Arg::new("command").num_args(1).allow_hyphen_values(true))
 }
 pub(crate) fn run(m: &ArgMatches, sm: &ArgMatches, argv: &[String]) -> Result<u8> {
     let policy = Policy::up_to(crate::cli::allowed(m));
@@ -31,48 +26,18 @@ pub(crate) fn run(m: &ArgMatches, sm: &ArgMatches, argv: &[String]) -> Result<u8
         .map(std::fs::read_to_string)
         .transpose()
         .context("reading shell script")?;
-    if let Some(script) = &script {
-        anyhow::ensure!(!script.contains('\0'), "script contains NUL");
-    }
-    let command = sm
-        .get_many::<String>("command")
-        .map(|v| v.cloned().collect::<Vec<_>>().join(" "))
-        .unwrap_or_default();
-    // Read all script lines before evaluation: an early `exit` must never turn
-    // remaining stdin records into new shell starts after process completion.
-    let script = script.map(prepare_script);
+    let command = script.unwrap_or_else(|| sm.get_one::<String>("command").cloned().unwrap_or_default());
+    validate_command(&command)?;
     let camera = crate::camera::CameraSession::open(m, argv, None)?;
     tokio::runtime::Runtime::new()?.block_on(async {
         let mut client = camera.connect().await?;
-        let mut shell = client.start_shell(policy, script.as_ref().map_or(command.as_str(), |(start, _)| start.as_str())).await?;
-        let mut stdin_open = script.is_none() && command.is_empty();
-        let (tx, mut input) = tokio::sync::mpsc::unbounded_channel();
-        if stdin_open {
-            // Tokio stdin uses a blocking task that can prevent runtime shutdown.
-            // A detached reader lets remote completion exit even with local stdin open.
-            std::thread::spawn(move || {
-                for line in std::io::stdin().lock().lines() {
-                    if tx.send(line).is_err() { break; }
-                }
-            });
-        } else { drop(tx); }
-        if let Some((_, script)) = script {
-            shell.write_stdin(&script).await?;
-        }
+        let mut shell = client.start_shell(policy, &command).await?;
         loop {
             tokio::select! {
                 biased;
                 bytes = shell.next_output() => match bytes? {
                     Some(bytes) => { let mut out = std::io::stdout().lock(); out.write_all(&bytes)?; out.flush()?; },
                     None => break,
-                },
-                line = input.recv(), if stdin_open => {
-                    if let Some(line) = line {
-                        shell.write_stdin(&(line? + "\n")).await?;
-                    } else {
-                        stdin_open = false;
-                        shell.write_stdin("exit\n").await?;
-                    }
                 },
                 signal = tokio::signal::ctrl_c() => { signal?; shell.interrupt().await?; },
             }
@@ -81,35 +46,45 @@ pub(crate) fn run(m: &ArgMatches, sm: &ArgMatches, argv: &[String]) -> Result<u8
     })
 }
 
-fn prepare_script(mut text: String) -> (String, String) {
-    if !text.ends_with('\n') {
-        text.push('\n');
-    }
-    let lines = text.bytes().filter(|b| *b == b'\n').count();
-    let start = format!(
-        "_h=; _n=0; while [ \"$_n\" -lt {lines} ]; do IFS= read -r _l || exit 1; _h=\"$_h$_l\n\"; _n=$((_n+1)); done; eval \"$_h\""
+fn validate_command(command: &str) -> Result<()> {
+    anyhow::ensure!(
+        !command.is_empty(),
+        "interactive stdin and EOF forwarding are unsupported; provide one complete command string"
     );
-    (start, text)
+    anyhow::ensure!(
+        command.len() <= 231,
+        "command/script exceeds 231 UTF-8 bytes; stdin uploads are unsupported by the bridge"
+    );
+    anyhow::ensure!(
+        !command.contains(['\0', '\x03']),
+        "command/script contains NUL or ETX"
+    );
+    Ok(())
 }
 
-#[cfg(all(test, unix))] // the only test runs the prepared script through the local /bin/sh
+#[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::{Command, Stdio};
 
     #[test]
-    fn scripts_are_read_before_execution_and_keep_exit_status() {
-        let (start, text) = prepare_script("printf '%s\\n' 'é'; exit 7\nignored\n".into());
-        assert!(start.len() <= 231);
-        let mut child = Command::new("/bin/sh")
-            .args(["-c", &start])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
+    fn scripts_must_fit_one_initial_record() {
+        for text in ["", &"x".repeat(232), "exit\n\x03", "x\0"] {
+            assert!(validate_command(text).is_err());
+        }
+        assert!(validate_command("exit\nreboot\n").is_ok());
+        assert!(validate_command("cat > file").is_ok());
+    }
+
+    #[test]
+    fn command_keeps_argument_boundaries() {
+        assert!(
+            command()
+                .try_get_matches_from(["shell", "--", "rm", "file name"])
+                .is_err()
+        );
+        let m = command()
+            .try_get_matches_from(["shell", "--", "rm 'file name'"])
             .unwrap();
-        child.stdin.take().unwrap().write_all(text.as_bytes()).unwrap();
-        let output = child.wait_with_output().unwrap();
-        assert_eq!(output.stdout, "é\n".as_bytes());
-        assert_eq!(output.status.code(), Some(7));
+        assert_eq!(m.get_one::<String>("command").unwrap(), "rm 'file name'");
     }
 }

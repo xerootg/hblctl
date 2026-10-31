@@ -337,6 +337,6 @@ fn shell_obeys_ceiling_and_streams_into_result_pane() {
     app.update(Event::ShellOutput("hello".into()));
     assert!(app.busy);
     assert_eq!(app.result, "hello");
-    app.update(Event::ShellOutput("hello world".into()));
+    app.update(Event::ShellOutput(" world".into()));
     assert_eq!(app.result, "hello world");
 }

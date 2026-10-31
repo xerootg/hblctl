@@ -148,9 +148,18 @@ allows only one selected response buffer, and rejects request-side selectors.
 
 ```
 hblctl --allow destructive shell -- 'sha256sum /system/bin/camera-test'
-hblctl --allow destructive shell                   # /bin/sh -i, stdin forwarded
-hblctl --allow destructive shell --script local.sh # script sent through stdin
+hblctl --allow destructive shell --script local.sh # entire script in initial command (231 bytes max)
 ```
+
+Pass exactly one complete command string. Empty commands and interactive forwarding
+are refused by CLI, TUI and MCP. The bridge treats each TCP read as one message
+and offers no stdin acknowledgement or framing; stdin uploads are therefore refused
+by the session API, including multi-record scripts. Scripts must fit in the initial
+231-byte UTF-8 command record and execute with `/bin/sh -c`. No pacing assumption
+or TCP write boundary is used for uploads. The protocol has no stdin-close indication:
+EOF cannot be forwarded, and the CLI never injects `exit` text. ETX is rejected as
+stdin data; `interrupt()` is the explicit SIGINT API. MCP discards unfinished shell
+connections and reconnects on the next tool call.
 
 Shell output streams as raw received bytes; Ctrl-C sends SIGINT to the immediate
 child. The session exclusively owns the connection until completion. `--timeout`

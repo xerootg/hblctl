@@ -122,6 +122,12 @@ pub struct Client<T> {
 }
 
 impl<T: Transport> Client<T> {
+    /// Whether an unfinished shell requires discarding this connection.
+    #[must_use]
+    pub fn shell_active(&self) -> bool {
+        self.shell_active
+    }
+
     /// A client that waits up to `timeout` for each result. Cookies start at `first_cookie` and increment,
     /// so every request in a session log is unambiguous.
     pub fn new(transport: T, timeout: Duration, first_cookie: u32) -> Self {

@@ -87,22 +87,18 @@ impl<T: Transport> ShellSession<'_, T> {
             timeout: self.client.timeout,
         }
     }
-    /// Forward UTF-8 stdin, splitting at codepoint boundaries with room for NUL.
-    /// A leading ETX in any record is interpreted by firmware as SIGINT.
-    pub async fn write_stdin(&mut self, text: &str) -> Result<(), ClientError> {
-        if text.contains('\0') {
-            return Err(ClientError::ShellInput("stdin contains NUL".into()));
-        }
-        let mut rest = text;
-        while !rest.is_empty() {
-            let mut n = rest.len().min(231);
-            while !rest.is_char_boundary(n) {
-                n -= 1;
-            }
-            self.send(1, &rest.as_bytes()[..n]).await?;
-            rest = &rest[n..];
-        }
-        Ok(())
+    /// Reject stdin uploads: the bridge has no framing or acknowledgement for them.
+    /// Use a complete command in the initial request instead. ETX is a signal,
+    /// available explicitly through `interrupt()`, never stdin data.
+    pub fn write_stdin(&mut self, text: &str) -> std::future::Ready<Result<(), ClientError>> {
+        let reason = if text.contains('\x03') {
+            "stdin contains ETX; use interrupt() for SIGINT"
+        } else if text.contains('\0') {
+            "stdin contains NUL"
+        } else {
+            "stdin uploads unsupported: bridge has no record acknowledgement or framing"
+        };
+        std::future::ready(Err(ClientError::ShellInput(reason.into())))
     }
     /// Send SIGINT to the child PID (not its process group).
     pub async fn interrupt(&mut self) -> Result<(), ClientError> {

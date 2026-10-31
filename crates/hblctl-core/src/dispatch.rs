@@ -54,6 +54,11 @@ pub async fn invoke<T: Transport>(
         let command = std::str::from_utf8(&data[4..])
             .unwrap_or("")
             .trim_end_matches('\0');
+        if command.is_empty() {
+            return Err(
+                ClientError::ShellInput("non-interactive shell command must not be empty".into()).into(),
+            );
+        }
         let mut shell = client
             .start_shell_with_delay(
                 policy,

@@ -86,65 +86,15 @@ fn policy_refusal_precedes_connection() {
 }
 
 #[test]
-fn interactive_completion_does_not_wait_for_local_stdin() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let server = std::thread::spawn(move || {
-        let (mut socket, _) = listener.accept().unwrap();
-        let mut request = [0u8; 257];
-        socket.read_exact(&mut request).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        let record = Sutest::new(65, 1, 99);
-        socket
-            .write_all(
-                &BusFrame {
-                    header: BusHeader {
-                        signal: SIGNAL_TEST_TX,
-                        origin: NODE_EAGLE,
-                        dest: NODE_TCP_HOST,
-                        kind: TYPE_SUTEST,
-                    },
-                    record,
-                }
-                .encode_reply_message(),
-            )
+fn unsupported_input_is_refused_before_connection() {
+    for args in [vec![], vec!["--", "rm", "file name"], vec!["--", ""]] {
+        let output = Command::new(env!("CARGO_BIN_EXE_hblctl"))
+            .args(["--allow", "destructive", "shell"])
+            .args(args)
+            .stdin(Stdio::piped())
+            .output()
             .unwrap();
-    });
-    let dir = tempfile::tempdir_in(".").unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_hblctl"))
-        .args([
-            "--host",
-            "127.0.0.1",
-            "--port",
-            &port.to_string(),
-            "--sessions",
-            dir.path().to_str().unwrap(),
-            "--allow",
-            "destructive",
-            "shell",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let held_stdin = child.stdin.take().unwrap();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let status = loop {
-        if let Some(status) = child.try_wait().unwrap() {
-            break Some(status);
-        }
-        if std::time::Instant::now() >= deadline {
-            child.kill().unwrap();
-            child.wait().unwrap();
-            break None;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    };
-    drop(held_stdin);
-    server.join().unwrap();
-    assert!(
-        status.is_some_and(|s| s.success()),
-        "shell waited for local input after remote completion"
-    );
+        assert!(!output.status.success());
+        assert!(!String::from_utf8_lossy(&output.stderr).contains("connecting"));
+    }
 }
