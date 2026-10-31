@@ -77,6 +77,7 @@ pub struct Outcome {
 
 /// Client-level failure.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ClientError {
     /// An unfinished shell owns this connection; reconnect before reuse.
     #[error("unfinished shell session; reconnect before using the client")]

@@ -279,6 +279,7 @@ impl App {
         };
         self.confirmation = None;
         self.busy = true;
+        self.scroll = 0;
         self.result.clear();
         self.shell_truncated = false;
         Some(Effect::Invoke(call))
