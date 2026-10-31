@@ -33,4 +33,24 @@ class SchemaModelTest {
         assertEquals("7", args.getValue("n").jsonPrimitive.content)
         assertEquals("\"\n", args.getValue("text").jsonPrimitive.content)
     }
+
+    @Test fun integerOrNamedChoice() {
+        val schema = """{"properties":{"field_index":{"anyOf":[{"type":"integer","minimum":0,"maximum":30,"enum":[0,13,30]},{"type":"string","enum":["wifiRegion","wifi-region"]}],"default":13,"description":"Production field"}},"required":["field_index"]}"""
+        val fields = SchemaModel.fields(schema)
+        val field = fields.single()
+        assertEquals("13", field.initial)
+        assertTrue(field.hint.contains("wifi-region"))
+        for (text in listOf("13", "wifiRegion", "wifi-region")) {
+            assertNull(SchemaModel.error(field, text))
+            val value = Json.parseToJsonElement(SchemaModel.args(fields, mapOf("field_index" to text))).jsonObject.getValue("field_index").jsonPrimitive
+            assertEquals(text, value.content)
+            assertEquals(text != "13", value.isString)
+        }
+        for (text in listOf("-1", "1", "31", "1.5", "unknown", "")) {
+            assertNotNull(SchemaModel.error(field, text))
+            assertThrows(IllegalArgumentException::class.java) {
+                SchemaModel.args(fields, mapOf("field_index" to text))
+            }
+        }
+    }
 }

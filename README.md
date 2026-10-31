@@ -128,3 +128,18 @@ withdrawal, service readiness and USB acceptance checks do not yet have reviewed
 fixed commands. ADB apply/revert therefore refuse before mutation. MemoryFs exercises
 the transaction engine with write failures and mid-write power loss. No physical
 camera acceptance or post-reboot upgrade verification is claimed.
+
+## Production config
+
+`prod-config` selectors accept an integer or a listed name (including aliases such
+as `wifi-region`). Android forms accept either spelling as text and send integers
+as JSON numbers and names as JSON strings.
+
+A get result preserves `fields.field_index` and the raw hex `fields.values`.
+The derived result is namespaced by its buffer as `fields.values_decoded`:
+`{"field_index":13,"values":"06000000…","values_decoded":{"field":"wifiRegion","value":6}}`.
+Here `field` is the protocol property name and `value` is the typed value.
+Unknown indices omit the derived `field` and retain hex in the derived `value`;
+unsupported encodings also retain hex. The full `raw_result` is unchanged.
+Registry validation reserves `<buffer>_decoded` against ordinary response names,
+allows only one selected response buffer, and rejects request-side selectors.

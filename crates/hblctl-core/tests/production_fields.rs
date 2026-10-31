@@ -31,14 +31,17 @@ fn names_schema_and_typed_values() {
         .collect();
     rec.put(24, &text).unwrap();
     let out = codec::decode_with_tables(&r, f, &rec);
-    assert_eq!(out["field"], "suSerial");
-    assert_eq!(out["value"], "XT99001234");
+    assert_eq!(out["values_decoded"]["field"], "suSerial");
+    assert_eq!(out["values_decoded"]["value"], "XT99001234");
     rec.put(20, &27i32.to_le_bytes()).unwrap();
     rec.put(24, &(-42i32).to_le_bytes()).unwrap();
-    assert_eq!(codec::decode_with_tables(&r, f, &rec)["value"], -42);
+    assert_eq!(
+        codec::decode_with_tables(&r, f, &rec)["values_decoded"]["value"],
+        -42
+    );
     rec.put(20, &25i32.to_le_bytes()).unwrap();
     assert_eq!(
-        codec::decode_with_tables(&r, f, &rec)["value"],
+        codec::decode_with_tables(&r, f, &rec)["values_decoded"]["value"],
         codec::decode(f, &rec)["values"]
     );
 }
@@ -102,8 +105,8 @@ async fn get_by_name_replays_exact_wire_exchange() {
     .await
     .unwrap();
     assert_eq!(result["status"], "ok");
-    assert_eq!(result["fields"]["field"], "wifiRegion");
-    assert_eq!(result["fields"]["value"], 6);
+    assert_eq!(result["fields"]["values_decoded"]["field"], "wifiRegion");
+    assert_eq!(result["fields"]["values_decoded"]["value"], 6);
     assert_eq!(result["raw_result"], raw);
     assert!(client.transport().finished());
 }
@@ -123,27 +126,83 @@ fn all_declared_fields_decode_without_using_the_tail() {
             rec.put(24, &[0x80, 0xf6, 1, 0, 0, 0, 0, 0]).unwrap();
         }
         let out = codec::decode_with_tables(&r, f, &rec);
-        assert_eq!(out["field"], e.name);
+        assert_eq!(out["values_decoded"]["field"], e.name);
         match e.value {
-            0 => assert_eq!(out["value"], "🚀"),
-            1 | 2 | 5..=9 | 14..=17 | 23 | 24 => assert_eq!(out["value"], 255),
-            3 | 13 | 18..=20 | 30 => assert_eq!(out["value"], u32::MAX),
-            27 => assert_eq!(out["value"], -1),
-            4 => assert_eq!(out["value"], json!(vec![-1; 6])),
-            10..=12 => assert_eq!(out["value"], json!(vec![-1; 5])),
-            21 => assert_eq!(out["value"], json!(vec![-1; 10])),
-            22 => assert_eq!(out["value"], json!(vec![-1; 2])),
-            26 => assert_eq!(out["value"], json!(vec![-1; 18])),
-            25 | 28 | 29 => assert_eq!(out["value"], "ff".repeat(228)),
+            0 => assert_eq!(out["values_decoded"]["value"], "🚀"),
+            1 | 2 | 5..=9 | 14..=17 | 23 | 24 => assert_eq!(out["values_decoded"]["value"], 255),
+            3 | 13 | 18..=20 | 30 => assert_eq!(out["values_decoded"]["value"], u32::MAX),
+            27 => assert_eq!(out["values_decoded"]["value"], -1),
+            4 => assert_eq!(out["values_decoded"]["value"], json!(vec![-1; 6])),
+            10..=12 => assert_eq!(out["values_decoded"]["value"], json!(vec![-1; 5])),
+            21 => assert_eq!(out["values_decoded"]["value"], json!(vec![-1; 10])),
+            22 => assert_eq!(out["values_decoded"]["value"], json!(vec![-1; 2])),
+            26 => assert_eq!(out["values_decoded"]["value"], json!(vec![-1; 18])),
+            25 | 28 | 29 => assert_eq!(out["values_decoded"]["value"], "ff".repeat(228)),
             _ => panic!("unexpected production field"),
         }
     }
     let mut rec = Sutest::new(49, 2, 1);
     rec.put(20, &99i32.to_le_bytes()).unwrap();
     let out = codec::decode_with_tables(&r, f, &rec);
-    assert!(!out.contains_key("field"));
-    assert_eq!(out["value"], "00".repeat(228));
+    assert!(out["values_decoded"].get("field").is_none());
+    assert_eq!(out["values_decoded"]["value"], "00".repeat(228));
     for n in [json!(-1), json!(31), json!("missing")] {
         assert!(codec::encode_with_tables(&r, f, json!({"field_index": n}).as_object().unwrap()).is_err());
     }
+}
+
+fn selected_registry() -> registry::Registry {
+    let mut r = registry::builtin();
+    let f = &mut r.commands.iter_mut().find(|c| c.id == 49).unwrap().funcs[2];
+    f.response[0].name = "field".into();
+    f.response[1].selector = Some("field".into());
+    f.response[1].len = Some(4);
+    let mut ordinary = f.response[0].clone();
+    ordinary.name = "value".into();
+    ordinary.offset = 28;
+    f.response.push(ordinary);
+    r
+}
+
+#[test]
+fn selected_decode_preserves_ordinary_fields_and_raw_buffer() {
+    let r = selected_registry();
+    r.validate().unwrap();
+    let f = r.command("prod-config").unwrap().func("get").unwrap();
+    let mut rec = Sutest::new(49, 2, 1);
+    rec.put(20, &13i32.to_le_bytes()).unwrap();
+    rec.put(24, &6u32.to_le_bytes()).unwrap();
+    rec.put(28, &42i32.to_le_bytes()).unwrap();
+    let out = codec::decode_with_tables(&r, f, &rec);
+    assert_eq!(out["field"], 13);
+    assert_eq!(out["value"], 42);
+    assert_eq!(out["values"], "06000000");
+    assert_eq!(out["values_decoded"], json!({"field": "wifiRegion", "value": 6}));
+}
+
+#[test]
+fn rejects_request_side_selector() {
+    let mut r = selected_registry();
+    let f = &mut r.commands.iter_mut().find(|c| c.id == 49).unwrap().funcs[2];
+    f.request = f.response.clone();
+    assert!(r.validate().unwrap_err().0.contains("response-only"));
+}
+
+#[test]
+fn rejects_multiple_selected_response_buffers() {
+    let mut r = selected_registry();
+    let f = &mut r.commands.iter_mut().find(|c| c.id == 49).unwrap().funcs[2];
+    let mut second = f.response[1].clone();
+    second.name = "other".into();
+    second.offset = 32;
+    f.response.push(second);
+    assert!(r.validate().unwrap_err().0.contains("multiple"));
+}
+
+#[test]
+fn rejects_derived_name_collisions() {
+    let mut r = selected_registry();
+    let f = &mut r.commands.iter_mut().find(|c| c.id == 49).unwrap().funcs[2];
+    f.response[2].name = "values_decoded".into();
+    assert!(r.validate().unwrap_err().0.contains("collides"));
 }

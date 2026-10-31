@@ -229,7 +229,21 @@ impl Registry {
                 }
                 for (side, fields) in [("request", &f.request), ("response", &f.response)] {
                     check_layout(&format!("{}.{} {side}", c.name, f.name), fields)?;
+                    if side == "request" && fields.iter().any(|fld| fld.selector.is_some()) {
+                        return Err(Invalid("selector is response-only".into()));
+                    }
+                    if fields.iter().filter(|fld| fld.selector.is_some()).count() > 1 {
+                        return Err(Invalid("multiple table-selected response buffers".into()));
+                    }
                     for fld in fields {
+                        if fld.selector.is_some() {
+                            let derived = format!("{}_decoded", fld.name);
+                            if fields.iter().any(|other| other.name == derived) {
+                                return Err(Invalid(format!(
+                                    "derived name {derived} collides with response field"
+                                )));
+                            }
+                        }
                         if let Some(name) = &fld.table {
                             let entries = self
                                 .tables

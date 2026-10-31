@@ -81,13 +81,15 @@ pub fn encode_with_tables(
 }
 
 /// Decode table-selected values, retaining ordinary fields and the original buffer.
+/// Derived `field` and `value` members live under `<buffer>_decoded`.
 #[must_use]
 pub fn decode_with_tables(
     registry: &crate::registry::Registry,
     func: &FuncSpec,
     record: &Sutest,
 ) -> Map<String, Value> {
-    let mut out = decode(func, record);
+    let original = decode(func, record);
+    let mut out = original.clone();
     for f in &func.response {
         let Some(selector) = &f.selector else {
             continue;
@@ -95,16 +97,17 @@ pub fn decode_with_tables(
         let Some(entries) = f.table.as_ref().and_then(|t| registry.tables.get(t)) else {
             continue;
         };
-        let entry = out
+        let entry = original
             .get(selector)
             .and_then(Value::as_i64)
             .and_then(|n| entries.iter().find(|e| e.value == n));
         let Ok(b) = record.get(f.offset, f.size()) else {
             continue;
         };
+        let mut derived = Map::new();
         let mut value = json!(crate::hex(b));
         if let Some(e) = entry {
-            out.insert("field".into(), json!(e.name));
+            derived.insert("field".into(), json!(e.name));
             let encoding = e.encoding.as_deref().unwrap_or(&e.ty);
             if encoding == "utf32" {
                 value = json!(
@@ -127,7 +130,8 @@ pub fn decode_with_tables(
                 };
             }
         }
-        out.insert("value".into(), value);
+        derived.insert("value".into(), value);
+        out.insert(format!("{}_decoded", f.name), Value::Object(derived));
     }
     out
 }
