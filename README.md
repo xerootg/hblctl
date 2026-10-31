@@ -5,7 +5,8 @@ original **X2D 100C on firmware 4.2.0**. One command registry drives four fronte
 server for AI agents, and an Android app, so every command is available everywhere with no per-frontend code.
 
 > **Status: early.** The protocol was derived from static analysis of the 4.2.0 firmware and cross-checked against
-> public tools. It has not yet been run against a camera by this project.
+> public tools. Read-only commands have been verified against one original X2D 100C on 4.2.0 (see
+> [Connecting to the camera](#connecting-to-the-camera)); everything else is still unverified.
 
 ## Use
 
