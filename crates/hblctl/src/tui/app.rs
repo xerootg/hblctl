@@ -66,7 +66,7 @@ pub(crate) struct App {
     pub(crate) connection: String,
     pub(crate) busy: bool,
     pub(crate) logs: std::collections::VecDeque<String>,
-    pub(crate) scroll: u16,
+    pub(crate) scroll: usize,
 }
 
 impl App {
@@ -179,7 +179,7 @@ impl App {
                     self.logs.pop_front();
                 }
             }
-            Event::Scroll(n) => self.scroll = self.scroll.saturating_add_signed(n),
+            Event::Scroll(n) => self.scroll = self.scroll.saturating_add_signed(isize::from(n)),
             Event::Escape => {
                 if self.confirmation.take().is_none() {
                     self.filter.clear();

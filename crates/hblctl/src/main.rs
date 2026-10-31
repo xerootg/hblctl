@@ -77,9 +77,18 @@ fn load_registry(args: &[String]) -> Result<Registry> {
     }
 }
 
+fn validate_cli_registry(reg: &Registry) -> Result<()> {
+    anyhow::ensure!(
+        !reg.commands.iter().any(|c| c.name == "shell"),
+        "registry command collision with built-in shell subcommand"
+    );
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let argv: Vec<String> = std::env::args().collect();
     let reg = load_registry(&argv)?;
+    validate_cli_registry(&reg)?;
     let m = app(&reg).get_matches_from(&argv);
     match m.subcommand() {
         Some(("shell", sm)) => {
@@ -180,6 +189,18 @@ fn initial_cookie() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_cli_collision_is_rejected() {
+        let mut reg = registry::builtin();
+        reg.commands[0].name = "shell".into();
+        assert!(
+            validate_cli_registry(&reg)
+                .unwrap_err()
+                .to_string()
+                .contains("shell")
+        );
+    }
 
     #[test]
     fn registry_flag_forms() {

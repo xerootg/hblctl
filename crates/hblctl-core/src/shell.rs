@@ -14,6 +14,9 @@ pub struct ShellSession<'a, T> {
     client: &'a mut Client<T>,
     pending: VecDeque<BusFrame>,
     status: Option<u32>,
+    result: Option<Sutest>,
+    notifications: Vec<Sutest>,
+    notifications_truncated: bool,
     cookie: u32,
     deadline: tokio::time::Instant,
 }
@@ -50,6 +53,9 @@ impl<T: Transport> Client<T> {
             client: self,
             pending: VecDeque::new(),
             status: None,
+            result: None,
+            notifications: Vec::new(),
+            notifications_truncated: false,
             cookie,
             deadline,
         };
@@ -132,6 +138,11 @@ impl<T: Transport> ShellSession<'_, T> {
                     continue;
                 }
                 if r.func == 4 {
+                    if self.notifications.len() < 1024 {
+                        self.notifications.push(r.clone());
+                    } else {
+                        self.notifications_truncated = true;
+                    }
                     let b = &r.data[4..];
                     return Ok(Some(
                         b[..b.iter().position(|b| *b == 0).unwrap_or(b.len())].to_vec(),
@@ -139,6 +150,7 @@ impl<T: Transport> ShellSession<'_, T> {
                 }
                 if r.func == 1 {
                     self.status = Some(r.u32_at(16).unwrap_or(1));
+                    self.result = Some(r);
                     self.client.shell_active = false;
                 }
                 continue;
@@ -157,6 +169,24 @@ impl<T: Transport> ShellSession<'_, T> {
             }
         }
     }
+    /// Final wire record, available after completion.
+    #[must_use]
+    pub fn result(&self) -> Option<&Sutest> {
+        self.result.as_ref()
+    }
+
+    /// Retained raw output notifications (at most 1024 records).
+    #[must_use]
+    pub fn notifications(&self) -> &[Sutest] {
+        &self.notifications
+    }
+
+    /// Whether raw notifications were discarded while draining.
+    #[must_use]
+    pub fn notifications_truncated(&self) -> bool {
+        self.notifications_truncated
+    }
+
     /// Drain remaining output and return the wire success/failure status (0 or 1).
     /// `HblShell` does not transmit the child's numeric exit code.
     pub async fn wait(&mut self) -> Result<u32, ClientError> {

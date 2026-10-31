@@ -73,9 +73,24 @@ pub async fn invoke<T: Transport>(
             output.push(&bytes);
         }
         let exit_status = shell.wait().await?;
-        return Ok(
-            json!({"operation": what, "output": String::from_utf8_lossy(&output.bytes), "output_hex": crate::hex(&output.bytes), "truncated": output.truncated, "exit_status": exit_status}),
-        );
+        let record = shell.result().ok_or(ClientError::Closed { cmd: 65, func: 1 })?;
+        let status = match Status::of(record) {
+            Status::Ok => json!("ok"),
+            Status::Error { code, message } => json!({"error": {"code": code, "message": message}}),
+            Status::Other(x) => json!({"other": x}),
+        };
+        let result = json!({
+            "operation": what, "status": status,
+            "fields": codec::decode_with_tables(registry, f, record),
+            "raw_result": crate::hex(&record.encode()), "verified_layout": f.verified,
+            "progress": [], "stray_frames": 0,
+            "notifications": shell.notifications().iter().map(|n| crate::hex(&n.encode())).collect::<Vec<_>>(),
+            "notifications_truncated": shell.notifications_truncated(),
+            "output": String::from_utf8_lossy(&output.bytes), "output_hex": crate::hex(&output.bytes),
+            "truncated": output.truncated, "exit_status": exit_status,
+        });
+        tracing::info!(target: "hblctl::op", op = %what, result = %result, "done");
+        return Ok(result);
     }
     let out = client.call(c.id, f.func, &data).await?;
     let wire_status = if c.id == 52 && out.result.u32_at(16).unwrap_or(1) == 1 {
@@ -117,6 +132,49 @@ mod tests {
 
     fn args(v: &Value) -> Map<String, Value> {
         v.as_object().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn shell_preserves_standard_envelope_and_bounds_notifications() {
+        let registry = crate::registry::builtin();
+        let mut request = Sutest::new(65, 1, 1);
+        request.data[4..8].copy_from_slice(b"true");
+        let frame = |record| {
+            BusFrame {
+                header: BusHeader {
+                    signal: SIGNAL_TEST_TX,
+                    origin: NODE_EAGLE,
+                    dest: NODE_TCP_HOST,
+                    kind: TYPE_SUTEST,
+                },
+                record,
+            }
+            .encode_reply_message()
+        };
+        let mut notification = Sutest::new(65, 4, 9);
+        notification.data[4] = b'x';
+        let final_record = Sutest::new(65, 1, 9);
+        let steps = std::iter::once(Step::Expect(BusFrame::command(request).encode()))
+            .chain((0..1100).map(|_| Step::Reply(frame(notification.clone()))))
+            .chain(std::iter::once(Step::Reply(frame(final_record.clone()))));
+        let mut client = Client::new(MockTransport::new(steps), Duration::from_secs(10), 1);
+        let result = invoke(
+            &mut client,
+            &registry,
+            Policy::up_to(Safety::Destructive),
+            "hbl-shell",
+            "start-shell",
+            &args(&json!({"command_utf8_z":"true"})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["status"], "ok");
+        assert!(result["fields"].is_object());
+        assert_eq!(result["raw_result"], crate::hex(&final_record.encode()));
+        assert!(result["verified_layout"].is_boolean());
+        assert!(result["notifications"].as_array().unwrap().len() <= 1024);
+        assert_eq!(result["notifications_truncated"], true);
+        assert_eq!(result["output"].as_str().unwrap().len(), 1100);
     }
 
     #[tokio::test]

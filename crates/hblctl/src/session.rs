@@ -48,12 +48,15 @@ impl Session {
             .context("formatting session timestamp")?;
         let dir = root.join(format!("{stamp}-{}", std::process::id()));
         fs::create_dir_all(root)?;
-        let mut builder = fs::DirBuilder::new();
         #[cfg(unix)]
-        {
+        let builder = {
             use std::os::unix::fs::DirBuilderExt;
+            let mut builder = fs::DirBuilder::new();
             builder.mode(0o700);
-        }
+            builder
+        };
+        #[cfg(not(unix))]
+        let builder = fs::DirBuilder::new();
         builder
             .create(&dir)
             .with_context(|| format!("creating session directory {}", dir.display()))?;

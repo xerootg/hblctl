@@ -39,13 +39,18 @@ fn is_shell(registry: &Registry, command: &str) -> bool {
     registry.command(command).is_some_and(|c| c.id == 65)
 }
 
-async fn until_shutdown(
-    cancelled: tokio::sync::oneshot::Receiver<()>,
-    work: impl std::future::Future<Output = ()>,
-) {
+async fn until_shutdown<T>(
+    cancellable: bool,
+    cancelled: impl std::future::Future<Output = Result<(), tokio::sync::oneshot::error::RecvError>>,
+    work: impl std::future::Future<Output = T>,
+) -> Option<T> {
+    if !cancellable {
+        return Some(work.await);
+    }
     tokio::select! {
-        _ = cancelled => {},
-        () = work => {},
+        biased;
+        _ = cancelled => None,
+        result = work => Some(result),
     }
 }
 
@@ -97,11 +102,16 @@ async fn camera_worker(
     policy: Policy,
     mut work: tokio::sync::mpsc::UnboundedReceiver<Effect>,
     events: tokio::sync::mpsc::Sender<Event>,
+    mut cancelled: tokio::sync::oneshot::Receiver<()>,
 ) {
     let mut client = None;
-    while let Some(effect) = work.recv().await {
-        let reconnect = matches!(effect, Effect::Reconnect);
-        if reconnect {
+    loop {
+        let effect = tokio::select! {
+            biased;
+            _ = &mut cancelled => return,
+            effect = work.recv() => match effect { Some(effect) => effect, None => return },
+        };
+        if matches!(effect, Effect::Reconnect) {
             client = None;
         } // Drop the old socket before opening another.
         if client.is_none() {
@@ -137,19 +147,26 @@ async fn camera_worker(
         match effect {
             Effect::Invoke(call) => {
                 let is_shell = is_shell(&registry, &call.command);
-                let result = if is_shell {
-                    stream_shell(
-                        client.as_mut().expect("connected"),
-                        &registry,
-                        policy,
-                        &call,
-                        &events,
-                    )
-                    .await
-                    .map_err(|e| e.to_string())
-                } else {
-                    invoke(client.as_mut().expect("connected"), &registry, policy, call).await
+                let result = until_shutdown(is_shell, &mut cancelled, async {
+                    if is_shell {
+                        stream_shell(
+                            client.as_mut().expect("connected"),
+                            &registry,
+                            policy,
+                            &call,
+                            &events,
+                        )
+                        .await
+                        .map_err(|e| e.to_string())
+                    } else {
+                        invoke(client.as_mut().expect("connected"), &registry, policy, call).await
+                    }
+                })
+                .await;
+                let Some(result) = result else {
+                    return;
                 };
+                tracing::info!(target: "hblctl::op", shell = is_shell, result = ?result, "TUI operation completed");
                 // After any failed exchange, drop the stream: its framing/cookie
                 // state may no longer be safe to reuse.
                 if result.is_err() {
@@ -203,8 +220,7 @@ pub(crate) fn run(
     let runtime = tokio::runtime::Runtime::new()?;
     let worker = std::thread::spawn(move || {
         runtime.block_on(async move {
-            let work_loop = camera_worker(camera, registry, policy, work, events);
-            until_shutdown(cancelled, work_loop).await;
+            camera_worker(camera, registry, policy, work, events, cancelled).await;
         });
         runtime.shutdown_timeout(Duration::from_secs(1));
         let _ = finished.send(());
@@ -213,8 +229,7 @@ pub(crate) fn run(
     let _ = shutdown.send(());
     drop(requests);
     drop(updates);
-    done.recv_timeout(Duration::from_secs(2))
-        .context("camera worker did not stop")?;
+    done.recv().context("camera worker did not stop")?;
     let joined = worker
         .join()
         .map_err(|_| anyhow::anyhow!("camera worker panicked"));
@@ -318,10 +333,37 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn shutdown_waits_for_ordinary_operation() {
+        let (shutdown, cancelled) = tokio::sync::oneshot::channel();
+        let (finished, observed) = tokio::sync::oneshot::channel();
+        shutdown.send(()).unwrap();
+        until_shutdown(false, cancelled, async move {
+            tokio::task::yield_now().await;
+            finished.send(()).unwrap();
+        })
+        .await;
+        observed.await.unwrap();
+    }
+
+    #[test]
+    fn scroll_reaches_completion_after_seventy_thousand_lines() {
+        let mut app = App::new(hblctl_core::registry::builtin(), Policy::default());
+        app.update(Event::ShellOutput("x\n".repeat(70_000)));
+        app.update(Event::ShellCompleted(Ok(serde_json::json!({"exit_status":0}))));
+        for _ in 0..14_100 {
+            app.update(Event::Scroll(5));
+        }
+        assert!(app.scroll > 65_535);
+        assert!(view::result_window(&app.result, app.scroll).contains("exit_status: 0"));
+        let wrapped = format!("{}\nexit_status: 0\n", "x".repeat(70_000));
+        assert_eq!(view::result_window(&wrapped, usize::MAX), "exit_status: 0\n");
+    }
+
+    #[tokio::test]
     async fn shutdown_drops_quiet_work_promptly() {
         let (shutdown, cancelled) = tokio::sync::oneshot::channel();
         let (dropped, observed) = tokio::sync::oneshot::channel::<()>();
-        let worker = tokio::spawn(until_shutdown(cancelled, async move {
+        let worker = tokio::spawn(until_shutdown(true, cancelled, async move {
             let _guard = dropped;
             std::future::pending::<()>().await;
         }));

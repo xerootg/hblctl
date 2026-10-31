@@ -69,11 +69,17 @@ pub(crate) fn tools(registry: &Registry, policy: Policy) -> Vec<Tool> {
             )
         })
         .collect();
-    if policy.max == Safety::Destructive {
+    if policy.max == Safety::Destructive && !shell_collision(registry) {
         let schema = serde_json::json!({"type":"object","properties":{"command":{"type":"string","minLength":1,"maxLength":231}},"required":["command"],"additionalProperties":false});
         result.push(Tool::new("shell__run", "Run a root shell command; returns output and wire success/failure (not numeric child exit code)", Arc::new(schema.as_object().unwrap().clone())).with_annotations(ToolAnnotations::new().read_only(false).destructive(true).idempotent(false)));
     }
     result
+}
+
+fn shell_collision(registry: &Registry) -> bool {
+    registry
+        .operations()
+        .any(|(c, f)| tool_name(c, f) == "shell__run")
 }
 
 /// Split a tool name back into (command, func).
@@ -124,6 +130,7 @@ impl<T: Transport + Send + Sync + 'static> McpServer<T> {
             }
             let client = slot.as_mut().expect("connected");
             if name == "shell__run" {
+                anyhow::ensure!(!shell_collision(&self.registry), "registry tool name collision with built-in shell__run");
                 self.policy.check("shell.run", Safety::Destructive)?;
                 anyhow::ensure!(args.len() == 1, "expected only command");
                 let command = args.get("command").and_then(Value::as_str).ok_or_else(|| anyhow::anyhow!("expected command string"))?;
@@ -213,6 +220,42 @@ mod tests {
          "response": [{"name": "value", "offset": 24, "type": "u32"}]},
         {"func": 1, "name": "set", "safety": "persistent",
          "request": [{"name": "field", "offset": 20, "type": "u32"}, {"name": "value", "offset": 24, "type": "u32"}]}]}]}"#;
+
+    #[tokio::test]
+    async fn shell_name_collision_is_refused_without_sending() {
+        let reg = Registry::from_json(r#"{"target":"test","commands":[{"id":49,"name":"shell","funcs":[{"func":1,"name":"run","safety":"read"}]}]}"#).unwrap();
+        let policy = Policy::up_to(Safety::Destructive);
+        assert_eq!(
+            tools(&reg, policy)
+                .iter()
+                .filter(|t| t.name == "shell__run")
+                .count(),
+            1
+        );
+        let server = McpServer::new(
+            Client::new(MockTransport::new([]), Duration::from_secs(1), 1),
+            reg,
+            policy,
+        );
+        let result = server
+            .call(
+                "shell__run",
+                serde_json::json!({"command":"true"}).as_object().unwrap().clone(),
+            )
+            .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].as_text().unwrap().text.contains("collision"));
+        assert!(
+            server
+                .client
+                .lock()
+                .await
+                .as_ref()
+                .unwrap()
+                .transport()
+                .finished()
+        );
+    }
 
     #[test]
     fn production_tool_schema_has_names_and_integers() {

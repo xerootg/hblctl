@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use clap::{Arg, ArgMatches, Command};
 use hblctl_core::{Policy, Safety};
-use std::io::Write;
+use std::io::{Read, Write};
 
 pub(crate) fn command() -> Command {
     Command::new("shell")
@@ -23,7 +23,7 @@ pub(crate) fn run(m: &ArgMatches, sm: &ArgMatches, argv: &[String]) -> Result<u8
     policy.check("shell.run", Safety::Destructive)?;
     let script = sm
         .get_one::<String>("script")
-        .map(std::fs::read_to_string)
+        .map(|path| read_script(std::fs::File::open(path)?))
         .transpose()
         .context("reading shell script")?;
     let command = script.unwrap_or_else(|| sm.get_one::<String>("command").cloned().unwrap_or_default());
@@ -79,6 +79,13 @@ async fn until_deadline_or_signal(
     }
 }
 
+fn read_script(reader: impl Read) -> Result<String> {
+    let mut bytes = Vec::new();
+    reader.take(232).read_to_end(&mut bytes)?;
+    anyhow::ensure!(bytes.len() <= 231, "command/script exceeds 231 UTF-8 bytes");
+    String::from_utf8(bytes).context("shell script must be UTF-8")
+}
+
 fn validate_command(command: &str) -> Result<()> {
     anyhow::ensure!(
         !command.is_empty(),
@@ -98,6 +105,23 @@ fn validate_command(command: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn script_reader_is_bounded_before_utf8_decoding() {
+        struct Endless(usize);
+        impl std::io::Read for Endless {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                self.0 += buf.len();
+                assert!(self.0 <= 232);
+                buf.fill(0xff);
+                Ok(buf.len())
+            }
+        }
+        assert!(read_script(Endless(0)).unwrap_err().to_string().contains("231"));
+        assert_eq!(read_script(&b"true"[..]).unwrap(), "true");
+        assert!(read_script(&[0xff][..]).is_err());
+        assert!(read_script(&[b'x'; 231][..]).is_ok());
+    }
 
     #[test]
     fn scripts_must_fit_one_initial_record() {
