@@ -52,9 +52,12 @@ for prerequisites, native binding generation, and APK build/test commands.
 Verified on an original X2D 100C, firmware 4.2.0, over USB (2026-10-31):
 
 - Plug the camera into a **root USB port** of the computer (a Dell dock dropped the link).
-- At the camera's connection prompt choose **tether**, not Skip. The camera powers its USB link down unless it
-  believes a tether session is active; with the camera setting *Power off while tethered* set to *Never* the link
-  stays up indefinitely. Nothing on the computer needs to speak Phocus.
+- At the camera's connection prompt choose **tether**, not Skip. The camera then drops and re-enumerates the USB
+  link once (about ten seconds after it first appears) and from then on holds it; with the camera setting *Power off
+  while tethered* set to *Never* it stays up indefinitely. Skip, or leaving the prompt unanswered, ends the link.
+  Nothing on the computer needs to speak Phocus.
+- Wait for that second enumeration before connecting; a connection attempt during the drop fails with
+  `connecting to 192.168.42.2:30303`.
 - The camera serves DHCP on its USB network interface: the computer gets `192.168.42.1`, the camera is
   `192.168.42.2`, and the diagnostic port is `30303`, which is `hblctl`'s default. No mass-storage mode is needed.
 - The camera's hotspot is the other transport the port is reachable over.
