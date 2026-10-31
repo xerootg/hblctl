@@ -47,6 +47,20 @@ The Jetpack Compose app renders operations and forms from the same registry thro
 It records sessions and supports capture viewing and ZIP export. See [android/README.md](android/README.md)
 for prerequisites, native binding generation, and APK build/test commands.
 
+## Connecting to the camera
+
+Verified on an original X2D 100C, firmware 4.2.0, over USB (2026-10-31):
+
+- Plug the camera into a **root USB port** of the computer (a Dell dock dropped the link).
+- At the camera's connection prompt choose **tether**, not Skip. The camera powers its USB link down unless it
+  believes a tether session is active; with the camera setting *Power off while tethered* set to *Never* the link
+  stays up indefinitely. Nothing on the computer needs to speak Phocus.
+- The camera serves DHCP on its USB network interface: the computer gets `192.168.42.1`, the camera is
+  `192.168.42.2`, and the diagnostic port is `30303`, which is `hblctl`'s default. No mass-storage mode is needed.
+- The camera's hotspot is the other transport the port is reachable over.
+
+First exchange recorded as a replay test: `crates/hblctl-core/tests/fixtures/x2d-4.2.0-firmware-version.hblcap`.
+
 ## Safety
 
 Some commands can permanently damage a camera (factory configuration, calibration data, camera type, firmware
