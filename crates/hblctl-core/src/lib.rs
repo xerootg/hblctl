@@ -25,3 +25,9 @@ pub fn hex(b: &[u8]) -> String {
 
 pub use client::{Client, Outcome, Status};
 pub use safety::{Policy, Safety};
+
+#[cfg(test)]
+mod shell_tests;
+
+pub mod shell;
+pub use shell::ShellSession;

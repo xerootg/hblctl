@@ -27,7 +27,7 @@ pub(crate) struct CameraSession {
 impl CameraSession {
     pub(crate) fn open(m: &ArgMatches, argv: &[String], logs: Option<Sender<String>>) -> Result<Self> {
         let session = session::Session::create(&crate::sessions_root(m), argv)?;
-        let file = File::create(session.events_path()).context("creating events.jsonl")?;
+        let file = session.events()?;
         let tui = logs.is_some();
         let writer = EventFile {
             file,

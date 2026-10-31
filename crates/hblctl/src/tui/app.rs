@@ -39,6 +39,8 @@ pub(crate) enum Event {
     Run,
     Reconnect,
     Completed(Result<Value, String>),
+    ShellOutput(String),
+    ShellCompleted(Result<Value, String>),
     Connection(String),
     Log(String),
     Scroll(i16),
@@ -60,10 +62,11 @@ pub(crate) struct App {
     pub(crate) focus: Focus,
     pub(crate) confirmation: Option<String>,
     pub(crate) result: String,
+    shell_truncated: bool,
     pub(crate) connection: String,
     pub(crate) busy: bool,
     pub(crate) logs: std::collections::VecDeque<String>,
-    pub(crate) scroll: u16,
+    pub(crate) scroll: usize,
 }
 
 impl App {
@@ -87,6 +90,7 @@ impl App {
             focus: Focus::Operations,
             confirmation: None,
             result: String::new(),
+            shell_truncated: false,
             connection: "disconnected (lazy connection)".into(),
             busy: false,
             logs: std::collections::VecDeque::default(),
@@ -133,6 +137,20 @@ impl App {
         });
     }
 
+    fn shell_output(&mut self, s: &str) {
+        let mut n = s
+            .len()
+            .min(hblctl_core::shell::OUTPUT_LIMIT.saturating_sub(self.result.len()));
+        while !s.is_char_boundary(n) {
+            n -= 1;
+        }
+        self.result.push_str(&s[..n]);
+        if n < s.len() && !self.shell_truncated {
+            self.shell_truncated = true;
+            self.result.push_str("\n[truncated: true]\n");
+        }
+    }
+
     pub(crate) fn update(&mut self, event: Event) -> Option<Effect> {
         match event {
             Event::Completed(result) => {
@@ -143,6 +161,17 @@ impl App {
                     Err(e) => format!("Error: {e}"),
                 };
             }
+            Event::ShellCompleted(result) => {
+                self.busy = false;
+                let status = match result {
+                    Ok(v) => format!("exit_status: {}", v["exit_status"]),
+                    Err(e) => format!("Error: {e}"),
+                };
+                self.result.push('\n');
+                self.result.push_str(&status);
+                self.result.push('\n');
+            }
+            Event::ShellOutput(s) => self.shell_output(&s),
             Event::Connection(s) => self.connection = s,
             Event::Log(s) => {
                 self.logs.push_back(s);
@@ -150,7 +179,7 @@ impl App {
                     self.logs.pop_front();
                 }
             }
-            Event::Scroll(n) => self.scroll = self.scroll.saturating_add_signed(n),
+            Event::Scroll(n) => self.scroll = self.scroll.saturating_add_signed(isize::from(n)),
             Event::Escape => {
                 if self.confirmation.take().is_none() {
                     self.filter.clear();
@@ -250,7 +279,9 @@ impl App {
         };
         self.confirmation = None;
         self.busy = true;
-        self.result = "Running…".into();
+        self.scroll = 0;
+        self.result.clear();
+        self.shell_truncated = false;
         Some(Effect::Invoke(call))
     }
 }

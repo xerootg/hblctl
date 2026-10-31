@@ -77,7 +77,17 @@ pub struct Outcome {
 
 /// Client-level failure.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum ClientError {
+    /// An unfinished shell owns this connection; reconnect before reuse.
+    #[error("unfinished shell session; reconnect before using the client")]
+    ShellActive,
+    /// Invalid shell input.
+    #[error("invalid shell input: {0}")]
+    ShellInput(String),
+    /// Shell execution requires destructive policy.
+    #[error(transparent)]
+    Refused(#[from] crate::safety::Refused),
     /// The transport failed.
     #[error(transparent)]
     Transport(#[from] TransportError),
@@ -105,17 +115,25 @@ pub enum ClientError {
 
 /// A protocol client over any [`Transport`].
 pub struct Client<T> {
-    transport: T,
-    framer: Framer,
-    next_cookie: u32,
-    timeout: Duration,
+    pub(crate) transport: T,
+    pub(crate) framer: Framer,
+    pub(crate) next_cookie: u32,
+    pub(crate) timeout: Duration,
+    pub(crate) shell_active: bool,
 }
 
 impl<T: Transport> Client<T> {
+    /// Whether an unfinished shell requires discarding this connection.
+    #[must_use]
+    pub fn shell_active(&self) -> bool {
+        self.shell_active
+    }
+
     /// A client that waits up to `timeout` for each result. Cookies start at `first_cookie` and increment,
     /// so every request in a session log is unambiguous.
     pub fn new(transport: T, timeout: Duration, first_cookie: u32) -> Self {
         Self {
+            shell_active: false,
             transport,
             framer: Framer::replies(),
             next_cookie: first_cookie,
@@ -130,6 +148,12 @@ impl<T: Transport> Client<T> {
 
     /// Send `cmd`/`func` with the given data region (bytes 0x10..0xFC) and wait for the result.
     pub async fn call(&mut self, cmd: u32, func: u32, data: &[u8]) -> Result<Outcome, ClientError> {
+        if self.shell_active {
+            return Err(ClientError::ShellActive);
+        }
+        if cmd == 65 {
+            return Err(ClientError::ShellInput("use start_shell for command 65".into()));
+        }
         let cookie = self.next_cookie;
         self.next_cookie = self.next_cookie.wrapping_add(1);
         let mut record = Sutest::new(cmd, func, cookie);

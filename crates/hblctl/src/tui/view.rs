@@ -9,7 +9,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Style},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
@@ -36,10 +36,13 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &App) {
     operations(frame, app, cols[0]);
     form(frame, app, right[0]);
     frame.render_widget(
-        Paragraph::new(app.result.as_str())
-            .wrap(Wrap { trim: false })
-            .scroll((app.scroll, 0))
-            .block(Block::bordered().title("Result | PgUp/PgDn scroll")),
+        Paragraph::new(result_window(
+            &app.result,
+            app.scroll,
+            right[1].width.saturating_sub(2),
+            usize::from(right[1].height.saturating_sub(2)),
+        ))
+        .block(Block::bordered().title("Result | PgUp/PgDn scroll")),
         right[1],
     );
     let log_height = usize::from(rows[2].height.saturating_sub(2));
@@ -83,6 +86,62 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &App) {
             popup,
         );
     }
+}
+
+// Wrap explicitly so row offsets and window slicing remain usize throughout.
+// Result text uses hard wrapping at grapheme boundaries, including wide characters.
+pub(crate) fn result_window(result: &str, scroll: usize, width: u16, height: usize) -> String {
+    if width == 0 || height == 0 {
+        return String::new();
+    }
+    let mut output = String::new();
+    let mut row_index = 0usize;
+    let mut emitted = 0;
+    let mut emit = |row: &str| {
+        if row_index >= scroll {
+            if emitted > 0 {
+                output.push('\n');
+            }
+            output.push_str(row);
+            emitted += 1;
+        }
+        row_index = row_index.saturating_add(1);
+        emitted == height
+    };
+    // Reuse one scratch row while skipping, retaining the last row so an offset
+    // past the end still displays the tail. Only the visible window is collected.
+    let mut row = String::new();
+    for line in result.lines() {
+        row.clear();
+        let span = Span::raw(line);
+        let mut used = 0;
+        for grapheme in span.styled_graphemes(Style::default()) {
+            #[cfg(test)]
+            GRAPHEMES_VISITED.with(|count| count.set(count.get() + 1));
+            let size = Span::raw(grapheme.symbol).width();
+            if size > usize::from(width) {
+                continue;
+            }
+            if used + size > usize::from(width) {
+                if emit(&row) {
+                    return output;
+                }
+                row.clear();
+                used = 0;
+            }
+            row.push_str(grapheme.symbol);
+            used += size;
+        }
+        if emit(&row) {
+            return output;
+        }
+    }
+    if emitted == 0 { row } else { output }
+}
+
+#[cfg(test)]
+thread_local! {
+    static GRAPHEMES_VISITED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn block(title: &str, active: bool) -> Block<'_> {
@@ -202,4 +261,22 @@ fn form(frame: &mut Frame<'_>, app: &App, area: Rect) {
         area,
         &mut state,
     );
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+
+    #[test]
+    fn multi_mib_narrow_window_stops_at_visible_rows_and_reaches_tail() {
+        let result = format!("{}\nexit_status: 0", "x".repeat(4 * 1024 * 1024));
+        GRAPHEMES_VISITED.with(|count| count.set(0));
+        assert_eq!(result_window(&result, 0, 2, 3), "xx\nxx\nxx");
+        GRAPHEMES_VISITED.with(|count| assert!(count.get() <= 8, "visited {} graphemes", count.get()));
+        assert_eq!(
+            result_window(&result, 2 * 1024 * 1024, 2, 20),
+            "ex\nit\n_s\nta\ntu\ns:\n 0"
+        );
+        assert_eq!(result_window(&result, usize::MAX, 2, 3), " 0");
+    }
 }

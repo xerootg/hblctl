@@ -8,7 +8,6 @@ use clap::{Arg, ArgAction, ArgMatches, Command};
 use hblctl_core::safety::{Policy, Safety};
 use hblctl_mods::{bundle::Bundle, camera::AdbFs, engine::Engine};
 use std::{
-    fs::File,
     io::{self, Write},
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -60,7 +59,7 @@ pub(crate) fn command() -> Command {
 pub(crate) fn run(global: &ArgMatches, m: &ArgMatches, invocation: &[String]) -> Result<()> {
     let (name, args) = m.subcommand().context("missing mods operation")?;
     let session = session::Session::create(&super::sessions_root(global), invocation)?;
-    let log = File::create(session.events_path())?;
+    let log = session.events()?;
     let subscriber = logging::subscriber(logging::Shared(Arc::new(Mutex::new(log))), "warn");
     let _guard = tracing::subscriber::set_default(subscriber);
     let bundle = Bundle::load(&PathBuf::from(

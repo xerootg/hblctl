@@ -12,7 +12,7 @@
 //! Files are written as the run progresses and flushed per record, so a crash still leaves a usable session.
 
 use std::fs::{self, File};
-use std::io::BufWriter;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -47,7 +47,19 @@ impl Session {
             .format(format_description!("[year][month][day]T[hour][minute][second]Z"))
             .context("formatting session timestamp")?;
         let dir = root.join(format!("{stamp}-{}", std::process::id()));
-        fs::create_dir_all(&dir).with_context(|| format!("creating session directory {}", dir.display()))?;
+        fs::create_dir_all(root)?;
+        #[cfg(unix)]
+        let builder = {
+            use std::os::unix::fs::DirBuilderExt;
+            let mut builder = fs::DirBuilder::new();
+            builder.mode(0o700);
+            builder
+        };
+        #[cfg(not(unix))]
+        let builder = fs::DirBuilder::new();
+        builder
+            .create(&dir)
+            .with_context(|| format!("creating session directory {}", dir.display()))?;
         let meta = json!({
             "hblctl_version": env!("CARGO_PKG_VERSION"),
             "started_utc": now.format(&time::format_description::well_known::Rfc3339).context("formatting start time")?,
@@ -55,7 +67,9 @@ impl Session {
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
         });
-        fs::write(dir.join("meta.json"), serde_json::to_vec_pretty(&meta)?).context("writing meta.json")?;
+        private_file(&dir.join("meta.json"))?
+            .write_all(&serde_json::to_vec_pretty(&meta)?)
+            .context("writing meta.json")?;
         Ok(Self { dir })
     }
 
@@ -71,16 +85,52 @@ impl Session {
         self.dir.join("capture.hblcap")
     }
 
+    /// Open the private JSON event log.
+    pub(crate) fn events(&self) -> Result<File> {
+        private_file(&self.events_path()).context("creating events.jsonl")
+    }
+
     /// Open the capture for writing.
     pub(crate) fn capture(&self) -> Result<CaptureWriter<BufWriter<File>>> {
-        let f = File::create(self.capture_path()).context("creating capture file")?;
+        let f = private_file(&self.capture_path()).context("creating capture file")?;
         Ok(CaptureWriter::new(BufWriter::new(f))?)
     }
+}
+
+fn private_file(path: &Path) -> std::io::Result<File> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn session_recordings_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let session = Session::create(tmp.path(), &[]).unwrap();
+        drop(session.capture().unwrap());
+        drop(session.events().unwrap());
+        assert_eq!(
+            fs::metadata(&session.dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        for name in ["meta.json", "events.jsonl", "capture.hblcap"] {
+            assert_eq!(
+                fs::metadata(session.dir.join(name)).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
 
     #[test]
     fn creates_directory_with_metadata() {

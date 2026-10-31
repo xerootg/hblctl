@@ -93,8 +93,10 @@ impl Transport for ReplayTransport {
         std::future::ready(self.send_now(bytes))
     }
 
-    fn recv(&mut self) -> impl std::future::Future<Output = Result<Option<Vec<u8>>, Error>> + Send {
-        std::future::ready(self.recv_now())
+    // The lazy body is required: constructing and dropping an unpolled recv must not consume a record.
+    #[allow(clippy::unused_async_trait_impl)]
+    async fn recv(&mut self) -> Result<Option<Vec<u8>>, Error> {
+        self.recv_now()
     }
 }
 
@@ -140,5 +142,13 @@ mod tests {
             t.recv().await.is_err(),
             "receiving when the capture says we sent is a divergence"
         );
+    }
+    #[tokio::test]
+    async fn dropping_unpolled_receive_preserves_record() {
+        let mut t = ReplayTransport::new(vec![r(Direction::Received, &[9])], true);
+        drop(t.recv());
+        assert_eq!(t.recv().await.unwrap(), Some(vec![9]));
+        assert_eq!(t.recv().await.unwrap(), None);
+        assert!(t.finished());
     }
 }

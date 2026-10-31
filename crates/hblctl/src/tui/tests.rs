@@ -314,3 +314,29 @@ fn production_form_offers_and_accepts_names() {
     }
     assert!(matches!(app.update(Event::Run), Some(Effect::Invoke(_))));
 }
+
+#[test]
+fn shell_obeys_ceiling_and_streams_into_result_pane() {
+    let mut app = App::new(hblctl_core::registry::builtin(), Policy::default());
+    for c in "hbl-shell".chars() {
+        app.update(Event::Text(c));
+    }
+    assert!(app.update(Event::Run).is_none());
+    assert!(app.result.contains("destructive"));
+    app.policy = Policy::up_to(Safety::Destructive);
+    app.fields
+        .iter_mut()
+        .find(|f| f.name == "command_utf8_z")
+        .unwrap()
+        .value = "true".into();
+    assert!(app.update(Event::Run).is_none());
+    for c in "hbl-shell.start-shell".chars() {
+        app.update(Event::Text(c));
+    }
+    assert!(matches!(app.update(Event::Run), Some(Effect::Invoke(_))));
+    app.update(Event::ShellOutput("hello".into()));
+    assert!(app.busy);
+    assert_eq!(app.result, "hello");
+    app.update(Event::ShellOutput(" world".into()));
+    assert_eq!(app.result, "hello world");
+}

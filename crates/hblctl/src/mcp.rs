@@ -36,7 +36,7 @@ pub(crate) fn tool_name(c: &CommandSpec, f: &FuncSpec) -> String {
 /// Every tool visible under `policy`.
 #[must_use]
 pub(crate) fn tools(registry: &Registry, policy: Policy) -> Vec<Tool> {
-    registry
+    let mut result: Vec<Tool> = registry
         .operations()
         .filter(|(_, f)| policy.check("", f.safety).is_ok())
         .map(|(c, f)| {
@@ -68,7 +68,18 @@ pub(crate) fn tools(registry: &Registry, policy: Policy) -> Vec<Tool> {
                     .open_world(false),
             )
         })
-        .collect()
+        .collect();
+    if policy.max == Safety::Destructive && !shell_collision(registry) {
+        let schema = serde_json::json!({"type":"object","properties":{"command":{"type":"string","minLength":1,"maxLength":231}},"required":["command"],"additionalProperties":false});
+        result.push(Tool::new("shell__run", "Run a root shell command; returns output and wire success/failure (not numeric child exit code)", Arc::new(schema.as_object().unwrap().clone())).with_annotations(ToolAnnotations::new().read_only(false).destructive(true).idempotent(false)));
+    }
+    result
+}
+
+fn shell_collision(registry: &Registry) -> bool {
+    registry
+        .operations()
+        .any(|(c, f)| tool_name(c, f) == "shell__run")
 }
 
 /// Split a tool name back into (command, func).
@@ -79,16 +90,21 @@ pub(crate) fn route(name: &str) -> Option<(&str, &str)> {
 
 /// The server: one client connection shared by all tool calls (calls are serialised).
 pub(crate) struct McpServer<T> {
-    client: Mutex<Client<T>>,
+    client: Mutex<Option<Client<T>>>,
+    reconnect: Option<Reconnect<T>>,
     registry: Registry,
     policy: Policy,
 }
+
+type Reconnect<T> =
+    Box<dyn Fn() -> std::pin::Pin<Box<dyn Future<Output = anyhow::Result<Client<T>>> + Send>> + Send + Sync>;
 
 impl<T> McpServer<T> {
     /// Serve `registry` over `client`, exposing operations up to `policy`.
     pub(crate) fn new(client: Client<T>, registry: Registry, policy: Policy) -> Self {
         Self {
-            client: Mutex::new(client),
+            client: Mutex::new(Some(client)),
+            reconnect: None,
             registry,
             policy,
         }
@@ -96,13 +112,43 @@ impl<T> McpServer<T> {
 }
 
 impl<T: Transport + Send + Sync + 'static> McpServer<T> {
+    pub(crate) fn with_reconnect(mut self, reconnect: Reconnect<T>) -> Self {
+        self.reconnect = Some(reconnect);
+        self
+    }
+
     /// Run one tool call; errors become tool errors the agent can read.
     pub(crate) async fn call(&self, name: &str, args: Map<String, Value>) -> CallToolResult {
-        let Some((c, f)) = route(name) else {
-            return CallToolResult::error(vec![Content::text(format!("unknown tool {name}"))]);
-        };
-        let mut client = self.client.lock().await;
-        match invoke(&mut client, &self.registry, self.policy, c, f, &args).await {
+        let mut slot = self.client.lock().await;
+        if slot.as_ref().is_some_and(Client::shell_active) {
+            *slot = None;
+        }
+        let result: anyhow::Result<Value> = async {
+            if slot.is_none() {
+                let reconnect = self.reconnect.as_ref().ok_or_else(|| anyhow::anyhow!("connection discarded; reconnect required"))?;
+                *slot = Some(reconnect().await?);
+            }
+            let client = slot.as_mut().expect("connected");
+            if name == "shell__run" {
+                anyhow::ensure!(!shell_collision(&self.registry), "registry tool name collision with built-in shell__run");
+                self.policy.check("shell.run", Safety::Destructive)?;
+                anyhow::ensure!(args.len() == 1, "expected only command");
+                let command = args.get("command").and_then(Value::as_str).ok_or_else(|| anyhow::anyhow!("expected command string"))?;
+                anyhow::ensure!(!command.is_empty(), "non-interactive shell command must not be empty");
+                let mut session = client.start_shell(self.policy, command).await?;
+                let mut output = hblctl_core::shell::OutputCapture::default();
+                while let Some(bytes) = session.next_output().await? { output.push(&bytes); }
+                return Ok(serde_json::json!({"output": String::from_utf8_lossy(&output.bytes), "output_hex": hblctl_core::hex(&output.bytes), "truncated": output.truncated, "exit_status": session.wait().await?}));
+            }
+            let (c, f) = route(name).ok_or_else(|| anyhow::anyhow!("unknown tool {name}"))?;
+            Ok(invoke(client, &self.registry, self.policy, c, f, &args).await?)
+        }.await;
+        // A failed exchange may leave a live shell or unread replies. Discard the
+        // connection and open a fresh recorded stream on the next tool call.
+        if result.is_err() && slot.as_ref().is_some_and(Client::shell_active) {
+            *slot = None;
+        }
+        match result {
             Ok(v) => CallToolResult::success(vec![Content::text(
                 serde_json::to_string_pretty(&v).unwrap_or_default(),
             )]),
@@ -153,6 +199,20 @@ mod tests {
     use hblctl_transport::mock::{MockTransport, Step};
     use std::time::Duration;
 
+    struct DelayedMock {
+        wire: MockTransport,
+        delay: Duration,
+    }
+    impl Transport for DelayedMock {
+        async fn send(&mut self, bytes: &[u8]) -> Result<(), hblctl_transport::Error> {
+            self.wire.send(bytes).await
+        }
+        async fn recv(&mut self) -> Result<Option<Vec<u8>>, hblctl_transport::Error> {
+            tokio::time::sleep(self.delay).await;
+            self.wire.recv().await
+        }
+    }
+
     const REG: &str = r#"{"target": "test", "commands": [
       {"id": 49, "name": "prod-config", "doc": "Factory parameters", "funcs": [
         {"func": 2, "name": "get", "safety": "read", "verified": true,
@@ -160,6 +220,42 @@ mod tests {
          "response": [{"name": "value", "offset": 24, "type": "u32"}]},
         {"func": 1, "name": "set", "safety": "persistent",
          "request": [{"name": "field", "offset": 20, "type": "u32"}, {"name": "value", "offset": 24, "type": "u32"}]}]}]}"#;
+
+    #[tokio::test]
+    async fn shell_name_collision_is_refused_without_sending() {
+        let reg = Registry::from_json(r#"{"target":"test","commands":[{"id":49,"name":"shell","funcs":[{"func":1,"name":"run","safety":"read"}]}]}"#).unwrap();
+        let policy = Policy::up_to(Safety::Destructive);
+        assert_eq!(
+            tools(&reg, policy)
+                .iter()
+                .filter(|t| t.name == "shell__run")
+                .count(),
+            1
+        );
+        let server = McpServer::new(
+            Client::new(MockTransport::new([]), Duration::from_secs(1), 1),
+            reg,
+            policy,
+        );
+        let result = server
+            .call(
+                "shell__run",
+                serde_json::json!({"command":"true"}).as_object().unwrap().clone(),
+            )
+            .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content[0].as_text().unwrap().text.contains("collision"));
+        assert!(
+            server
+                .client
+                .lock()
+                .await
+                .as_ref()
+                .unwrap()
+                .transport()
+                .finished()
+        );
+    }
 
     #[test]
     fn production_tool_schema_has_names_and_integers() {
@@ -190,6 +286,148 @@ mod tests {
         assert_eq!(rw.len(), 2);
         assert_eq!(rw[1].annotations.as_ref().unwrap().destructive_hint, Some(true));
         assert_eq!(route("prod-config__get"), Some(("prod-config", "get")));
+    }
+
+    #[tokio::test]
+    async fn shell_tool_requires_destructive_ceiling() {
+        let reg = Registry::from_json(REG).unwrap();
+        assert!(
+            !tools(&reg, Policy::default())
+                .iter()
+                .any(|t| t.name == "shell__run")
+        );
+        assert!(
+            tools(&reg, Policy::up_to(Safety::Destructive))
+                .iter()
+                .any(|t| t.name == "shell__run")
+        );
+        let server = McpServer::new(
+            Client::new(MockTransport::new([]), Duration::from_secs(1), 1),
+            reg,
+            Policy::default(),
+        );
+        assert_eq!(
+            server
+                .call(
+                    "shell__run",
+                    serde_json::json!({"command":"true"}).as_object().unwrap().clone()
+                )
+                .await
+                .is_error,
+            Some(true)
+        );
+    }
+
+    #[tokio::test]
+    async fn unfinished_shell_reconnects_for_both_routes() {
+        fn request() -> Vec<u8> {
+            let mut r = Sutest::new(65, 1, 1);
+            r.data[4..8].copy_from_slice(b"true");
+            BusFrame::command(r).encode()
+        }
+        for delay in [Duration::ZERO, Duration::from_millis(20)] {
+            for (name, args) in [
+                ("shell__run", serde_json::json!({"command":"true"})),
+                (
+                    "hbl-shell__start-shell",
+                    serde_json::json!({"command_utf8_z":"true"}),
+                ),
+            ] {
+                let first = Client::new(
+                    DelayedMock {
+                        wire: MockTransport::new([Step::Expect(request()), Step::Close]),
+                        delay,
+                    },
+                    Duration::from_millis(10),
+                    1,
+                );
+                let server = McpServer::new(
+                    first,
+                    hblctl_core::registry::builtin(),
+                    Policy::up_to(Safety::Destructive),
+                )
+                .with_reconnect(Box::new(|| {
+                    Box::pin(async {
+                        let reply = BusFrame {
+                            header: BusHeader {
+                                signal: SIGNAL_TEST_TX,
+                                origin: NODE_EAGLE,
+                                dest: NODE_TCP_HOST,
+                                kind: TYPE_SUTEST,
+                            },
+                            record: Sutest::new(65, 1, 99),
+                        };
+                        Ok(Client::new(
+                            DelayedMock {
+                                wire: MockTransport::new([
+                                    Step::Expect(request()),
+                                    Step::Reply(reply.encode_reply_message()),
+                                ]),
+                                delay: Duration::ZERO,
+                            },
+                            Duration::from_secs(1),
+                            1,
+                        ))
+                    })
+                }));
+                assert_eq!(
+                    server
+                        .call(name, args.as_object().unwrap().clone())
+                        .await
+                        .is_error,
+                    Some(true)
+                );
+                assert!(server.client.lock().await.is_none());
+                assert_eq!(
+                    server
+                        .call(name, args.as_object().unwrap().clone())
+                        .await
+                        .is_error,
+                    Some(false)
+                );
+                assert!(
+                    server
+                        .client
+                        .lock()
+                        .await
+                        .as_ref()
+                        .unwrap()
+                        .transport()
+                        .wire
+                        .finished()
+                );
+            }
+        }
+    }
+    #[tokio::test]
+    async fn empty_shell_is_refused_without_sending() {
+        let server = McpServer::new(
+            Client::new(MockTransport::new([]), Duration::from_secs(1), 1),
+            hblctl_core::registry::builtin(),
+            Policy::up_to(Safety::Destructive),
+        );
+        for (name, args) in [
+            ("shell__run", serde_json::json!({"command":""})),
+            ("hbl-shell__start-shell", serde_json::json!({"command_utf8_z":""})),
+        ] {
+            assert_eq!(
+                server
+                    .call(name, args.as_object().unwrap().clone())
+                    .await
+                    .is_error,
+                Some(true)
+            );
+        }
+        assert!(
+            server
+                .client
+                .lock()
+                .await
+                .as_ref()
+                .unwrap()
+                .transport()
+                .finished()
+        );
     }
 
     #[tokio::test]
@@ -226,5 +464,61 @@ mod tests {
         let refused = server.call("prod-config__set", args).await;
         assert_eq!(refused.is_error, Some(true));
         assert_eq!(server.call("nonsense", Map::new()).await.is_error, Some(true));
+    }
+    #[tokio::test]
+    async fn shell_capture_is_bounded_and_drained() {
+        let mut request = Sutest::new(65, 1, 1);
+        request.data[4..8].copy_from_slice(b"true");
+        let frame = |func, bytes: &[u8]| {
+            let mut record = Sutest::new(65, func, 9);
+            record.data[4..4 + bytes.len()].copy_from_slice(bytes);
+            BusFrame {
+                header: BusHeader {
+                    signal: SIGNAL_TEST_TX,
+                    origin: NODE_EAGLE,
+                    dest: NODE_TCP_HOST,
+                    kind: TYPE_SUTEST,
+                },
+                record,
+            }
+            .encode_reply_message()
+        };
+        let count = hblctl_core::shell::OUTPUT_LIMIT / 232 + 2;
+        let steps = std::iter::once(Step::Expect(BusFrame::command(request).encode()))
+            .chain((0..count).map(|_| Step::Reply(frame(4, &[b'x'; 232]))))
+            .chain(std::iter::once(Step::Reply(frame(1, &[]))));
+        let server = McpServer::new(
+            Client::new(MockTransport::new(steps), Duration::from_secs(10), 1),
+            hblctl_core::registry::builtin(),
+            Policy::up_to(Safety::Destructive),
+        );
+        let result = server
+            .call(
+                "shell__run",
+                serde_json::json!({"command":"true"}).as_object().unwrap().clone(),
+            )
+            .await;
+        assert_eq!(result.is_error, Some(false));
+        let text = result.content[0].as_text().unwrap();
+        let value: Value = serde_json::from_str(&text.text).unwrap();
+        assert_eq!(value["truncated"], true);
+        assert_eq!(
+            value["output"].as_str().unwrap().len(),
+            hblctl_core::shell::OUTPUT_LIMIT
+        );
+        assert_eq!(
+            value["output_hex"].as_str().unwrap().len(),
+            2 * hblctl_core::shell::OUTPUT_LIMIT
+        );
+        assert!(
+            server
+                .client
+                .lock()
+                .await
+                .as_ref()
+                .unwrap()
+                .transport()
+                .finished()
+        );
     }
 }
