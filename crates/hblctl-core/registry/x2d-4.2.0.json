@@ -662,7 +662,8 @@
       {
        "name": "field_index",
        "offset": 20,
-       "type": "s32"
+       "type": "s32",
+       "table": "production-fields"
       }
      ],
      "response": []
@@ -677,7 +678,8 @@
       {
        "name": "field_index",
        "offset": 20,
-       "type": "s32"
+       "type": "s32",
+       "table": "production-fields"
       },
       {
        "name": "values",
@@ -699,7 +701,8 @@
       {
        "name": "field_index",
        "offset": 20,
-       "type": "s32"
+       "type": "s32",
+       "table": "production-fields"
       }
      ],
      "response": [
@@ -713,7 +716,9 @@
        "offset": 24,
        "type": "bytes",
        "len": 228,
-       "doc": "Field-dependent encoding; string fields use one Latin-1 character per u32, not packed bytes."
+       "doc": "Typed value; UTF-32LE text ends at NUL. Remaining bytes may contain camera memory.",
+       "table": "production-fields",
+       "selector": "field_index"
       }
      ]
     },
@@ -727,7 +732,8 @@
       {
        "name": "field_index",
        "offset": 20,
-       "type": "s32"
+       "type": "s32",
+       "table": "production-fields"
       }
      ],
      "response": []
@@ -1313,5 +1319,366 @@
     }
    ]
   }
- ]
+ ],
+ "tables": {
+  "production-fields": [
+   {
+    "name": "suSerial",
+    "value": 0,
+    "type": "latin1_u32_cells",
+    "words": 10,
+    "access": "0x15103",
+    "doc": "suSerial; Qt type 10; declared encoding latin1_u32_cells; read/write. Exactly declared cell count; setter appends each low byte as QChar, including zero bytes (no NUL termination test). ",
+    "settings_keys": [
+     "Identity/SuSerial"
+    ],
+    "encoding": "utf32"
+   },
+   {
+    "name": "suModel",
+    "value": 1,
+    "type": "u8_in_u32",
+    "words": 1,
+    "access": "0x15103",
+    "doc": "suModel; Qt type 37; declared encoding u8_in_u32; read/write. One little-endian u32 cell; setter uses low 8 bits. ",
+    "settings_keys": [
+     "Identity/SuModel"
+    ]
+   },
+   {
+    "name": "imageSensorType",
+    "value": 2,
+    "type": "u8_in_u32",
+    "words": 1,
+    "access": "0x15103",
+    "doc": "imageSensorType; Qt type 37; declared encoding u8_in_u32; read/write. One little-endian u32 cell; setter uses low 8 bits. ",
+    "settings_keys": [
+     "ImageSensor/Type"
+    ]
+   },
+   {
+    "name": "imageSensorSerial",
+    "value": 3,
+    "type": "u32",
+    "words": 1,
+    "access": "0x15103",
+    "doc": "imageSensorSerial; Qt type 3; declared encoding u32; read/write. One little-endian unsigned 32-bit cell. ",
+    "settings_keys": [
+     "ImageSensor/Serial"
+    ]
+   },
+   {
+    "name": "imageSensorTempCalibration",
+    "value": 4,
+    "type": "s32_array",
+    "words": 6,
+    "access": "0x1500b",
+    "doc": "imageSensorTempCalibration; Qt type 2147483654; declared encoding s32_array; read/write. Signed two-complement 32-bit cell(s), no wire scaling established. ",
+    "settings_keys": [
+     "ImageSensor/TempCalibration"
+    ]
+   },
+   {
+    "name": "boardTestStatus",
+    "value": 5,
+    "type": "u8_in_u32",
+    "words": 1,
+    "access": "0x15103",
+    "doc": "boardTestStatus; Qt type 37; declared encoding u8_in_u32; read/write. One little-endian u32 cell; setter uses low 8 bits. ",
+    "settings_keys": [
+     "Status/BoardTestStatus"
+    ]
+   },
+   {
+    "name": "suTestStatus",
+    "value": 6,
+    "type": "u8_in_u32",
+    "words": 1,
+    "access": "0x15103",
+    "doc": "suTestStatus; Qt type 37; declared encoding u8_in_u32; read/write. One little-endian u32 cell; setter uses low 8 bits. ",
+    "settings_keys": [
+     "Status/SuTestStatus"
+    ]
+   },
+   {
+    "name": "calibrationStatus",
+    "value": 7,
+    "type": "u8_in_u32",
+    "words": 1,
+    "access": "0x15103",
+    "doc": "calibrationStatus; Qt type 37; declared encoding u8_in_u32; read/write. One little-endian u32 cell; setter uses low 8 bits. ",
+    "settings_keys": [
+     "Status/CalibrationStatus"
+    ]
+   },
+   {
+    "name": "dutStatus",
+    "value": 8,
+    "type": "u8_in_u32",
+    "words": 1,
+    "access": "0x15103",
+    "doc": "dutStatus; Qt type 37; declared encoding u8_in_u32; read/write. One little-endian u32 cell; setter uses low 8 bits. ",
+    "settings_keys": [
+     "Status/DutStatus"
+    ]
+   },
+   {
+    "name": "ultraFocusSensorPos",
+    "value": 9,
+    "type": "u8_in_u32",
+    "words": 1,
+    "access": "0x15103",
+    "doc": "ultraFocusSensorPos; Qt type 37; declared encoding u8_in_u32; read/write. One little-endian u32 cell; setter uses low 8 bits. ",
+    "settings_keys": [
+     "m_UltraFocusSensorPos"
+    ]
+   },
+   {
+    "name": "ultraFocusCalib0",
+    "value": 10,
+    "type": "s32_array",
+    "words": 5,
+    "access": "0x1510b",
+    "doc": "ultraFocusCalib0; Qt type 2147483654; declared encoding s32_array; read/write. Signed two-complement 32-bit cell(s), no wire scaling established. ",
+    "settings_keys": [
+     "UltraFocus/Calib0_EquipmentId",
+     "UltraFocus/Calib0_ID0",
+     "UltraFocus/Calib0_ID1",
+     "UltraFocus/Calib0_ID2",
+     "UltraFocus/Calib0_Pos"
+    ]
+   },
+   {
+    "name": "ultraFocusCalib1",
+    "value": 11,
+    "type": "s32_array",
+    "words": 5,
+    "access": "0x1510b",
+    "doc": "ultraFocusCalib1; Qt type 2147483654; declared encoding s32_array; read/write. Signed two-complement 32-bit cell(s), no wire scaling established. ",
+    "settings_keys": [
+     "UltraFocus/Calib1_EquipmentId",
+     "UltraFocus/Calib1_ID0",
+     "UltraFocus/Calib1_ID1",
+     "UltraFocus/Calib1_ID2",
+     "UltraFocus/Calib1_Pos"
+    ]
+   },
+   {
+    "name": "ultraFocusCalib2",
+    "value": 12,
+    "type": "s32_array",
+    "words": 5,
+    "access": "0x1510b",
+    "doc": "ultraFocusCalib2; Qt type 2147483654; declared encoding s32_array; read/write. Signed two-complement 32-bit cell(s), no wire scaling established. ",
+    "settings_keys": [
+     "UltraFocus/Calib2_EquipmentId",
+     "UltraFocus/Calib2_ID0",
+     "UltraFocus/Calib2_ID1",
+     "UltraFocus/Calib2_ID2",
+     "UltraFocus/Calib2_Pos"
+    ]
+   },
+   {
+    "name": "wifiRegion",
+    "value": 13,
+    "type": "u32",
+    "words": 1,
+    "access": "0x15103",
+    "doc": "wifiRegion; Qt type 3; declared encoding u32; read/write. One little-endian unsigned 32-bit cell. ",
+    "settings_keys": [
+     "Identity/WifiRegion"
+    ]
+   },
+   {
+    "name": "usbPower",
+    "value": 14,
+    "type": "u8_in_u32",
+    "words": 1,
+    "access": "0x15103",
+    "doc": "usbPower; Qt type 37; declared encoding u8_in_u32; read/write. One little-endian u32 cell; setter uses low 8 bits. ",
+    "settings_keys": [
+     "UsbPower"
+    ]
+   },
+   {
+    "name": "auxDebug",
+    "value": 15,
+    "type": "u8_in_u32",
+    "words": 1,
+    "access": "0x15103",
+    "doc": "auxDebug; Qt type 37; declared encoding u8_in_u32; read/write. One little-endian u32 cell; setter uses low 8 bits. ",
+    "settings_keys": [
+     "AuxDebug"
+    ]
+   },
+   {
+    "name": "irFilterType",
+    "value": 16,
+    "type": "u8_in_u32",
+    "words": 1,
+    "access": "0x15103",
+    "doc": "irFilterType; Qt type 37; declared encoding u8_in_u32; read/write. One little-endian u32 cell; setter uses low 8 bits. ",
+    "settings_keys": [
+     "Identity/IrFilterType"
+    ]
+   },
+   {
+    "name": "shellColor",
+    "value": 17,
+    "type": "u8_in_u32",
+    "words": 1,
+    "access": "0x15103",
+    "doc": "shellColor; Qt type 37; declared encoding u8_in_u32; read/write. One little-endian u32 cell; setter uses low 8 bits. ",
+    "settings_keys": [
+     "Identity/ShellColor"
+    ]
+   },
+   {
+    "name": "traceLevel",
+    "value": 18,
+    "type": "u32",
+    "words": 1,
+    "access": "0x15103",
+    "doc": "traceLevel; Qt type 3; declared encoding u32; read/write. One little-endian unsigned 32-bit cell. ",
+    "settings_keys": [
+     "TraceLevel"
+    ]
+   },
+   {
+    "name": "sucDebugEnableMask",
+    "value": 19,
+    "type": "u32",
+    "words": 1,
+    "access": "0x15103",
+    "doc": "sucDebugEnableMask; Qt type 3; declared encoding u32; read/write. One little-endian unsigned 32-bit cell. ",
+    "settings_keys": [
+     "SucDebugEnableMask"
+    ]
+   },
+   {
+    "name": "imxDebugEnableMask",
+    "value": 20,
+    "type": "u32",
+    "words": 1,
+    "access": "0x15103",
+    "doc": "imxDebugEnableMask; Qt type 3; declared encoding u32; read/write. One little-endian unsigned 32-bit cell. ",
+    "settings_keys": [
+     "ImxDebugEnableMask"
+    ]
+   },
+   {
+    "name": "accelerometerCalibration",
+    "value": 21,
+    "type": "s32_array",
+    "words": 10,
+    "access": "0x1510b",
+    "doc": "accelerometerCalibration; Qt type 2147483654; declared encoding s32_array; read/write. Signed two-complement 32-bit cell(s), no wire scaling established. ",
+    "settings_keys": [
+     "Accelerometer/Calibration"
+    ]
+   },
+   {
+    "name": "proximityCalibration",
+    "value": 22,
+    "type": "s32_array",
+    "words": 2,
+    "access": "0x1510b",
+    "doc": "proximityCalibration; Qt type 2147483654; declared encoding s32_array; read/write. Signed two-complement 32-bit cell(s), no wire scaling established. ",
+    "settings_keys": [
+     "ProximityCalibration"
+    ]
+   },
+   {
+    "name": "thumbwheelMode",
+    "value": 23,
+    "type": "u8_in_u32",
+    "words": 1,
+    "access": "0x15103",
+    "doc": "thumbwheelMode; Qt type 37; declared encoding u8_in_u32; read/write. One little-endian u32 cell; setter uses low 8 bits. ",
+    "settings_keys": [
+     "ThumbwheelMode"
+    ]
+   },
+   {
+    "name": "nrofMultiShotDACCalibrationValues",
+    "value": 24,
+    "type": "u8_in_u32",
+    "words": 1,
+    "access": "0x15103",
+    "doc": "nrofMultiShotDACCalibrationValues; Qt type 37; declared encoding u8_in_u32; read/write. One little-endian u32 cell; setter uses low 8 bits. ",
+    "settings_keys": [
+     "NrofMultiShotDACCalibrationValues"
+    ]
+   },
+   {
+    "name": "multiShotDACCalibration",
+    "value": 25,
+    "type": "QVariant_list",
+    "words": 32,
+    "access": "0x15103",
+    "doc": "multiShotDACCalibration; Qt type 9; declared encoding QVariant_list; read/write. Per-element QVariant conversion depends on existing property element types; not codegen ready. Unresolved or unsafe inline layout; retain hex. QVariant element types depend on existing settings.",
+    "settings_keys": [
+     "MultiShotDACCalibration"
+    ],
+    "encoding": "hex"
+   },
+   {
+    "name": "accelerometerCalibrationExt",
+    "value": 26,
+    "type": "s32_array",
+    "words": 18,
+    "access": "0x1510b",
+    "doc": "accelerometerCalibrationExt; Qt type 2147483654; declared encoding s32_array; read/write. Signed two-complement 32-bit cell(s), no wire scaling established. ",
+    "settings_keys": [
+     "Accelerometer/CalibrationExt"
+    ]
+   },
+   {
+    "name": "accelerometerCalibrationTemp",
+    "value": 27,
+    "type": "s32",
+    "words": 1,
+    "access": "0x15103",
+    "doc": "accelerometerCalibrationTemp; Qt type 2; declared encoding s32; read/write. Signed two-complement 32-bit cell(s), no wire scaling established. ",
+    "settings_keys": [
+     "Accelerometer/CalibrationTemp"
+    ]
+   },
+   {
+    "name": "accelerometerTemperatureCalib",
+    "value": 28,
+    "type": "s32_array",
+    "words": 280,
+    "access": "0x1510b",
+    "doc": "accelerometerTemperatureCalib; Qt type 2147483654; declared encoding s32_array; read/write. Signed two-complement 32-bit cell(s), no wire scaling established. Unresolved or unsafe inline layout; retain hex. 280 cells exceed the 57-cell inline buffer; no continuation known.",
+    "settings_keys": [
+     "Accelerometer/TemperatureCalib"
+    ],
+    "encoding": "hex"
+   },
+   {
+    "name": "DMic",
+    "value": 29,
+    "type": "u8_in_u32",
+    "words": 1,
+    "access": "0x15103",
+    "doc": "DMic; Qt type 37; declared encoding u8_in_u32; read/write. One little-endian u32 cell; setter uses low 8 bits. Unresolved or unsafe inline layout; retain hex. DMic/dMic property mismatch causes get/set failure.",
+    "settings_keys": [
+     "DMic"
+    ],
+    "encoding": "hex"
+   },
+   {
+    "name": "suVariant",
+    "value": 30,
+    "type": "u32",
+    "words": 1,
+    "access": "0x15103",
+    "doc": "suVariant; Qt type 3; declared encoding u32; read/write. One little-endian unsigned 32-bit cell. ",
+    "settings_keys": [
+     "Identity/SuVariant"
+    ]
+   }
+  ]
+ }
 }

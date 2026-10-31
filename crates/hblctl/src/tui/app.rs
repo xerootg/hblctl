@@ -5,7 +5,7 @@
 use crate::cli::Call;
 use hblctl_core::{
     codec,
-    registry::{FuncSpec, Registry, input_schema},
+    registry::{FuncSpec, Registry, input_schema_with_tables},
     safety::{Policy, Safety},
 };
 use serde_json::{Map, Value};
@@ -111,7 +111,7 @@ impl App {
     fn form(&mut self) {
         self.field = 0;
         self.fields = self.operation().map_or_else(Vec::new, |op| {
-            let schema = input_schema(&op.spec);
+            let schema = input_schema_with_tables(&self.registry, &op.spec);
             op.spec
                 .request
                 .iter()
@@ -231,7 +231,7 @@ impl App {
             .filter(|f| !f.value.is_empty() || (!f.required && f.schema["type"] == "string"))
             .map(|f| (f.name.clone(), Value::String(f.value.clone())))
             .collect();
-        if let Err(e) = codec::encode(&op.spec, &args) {
+        if let Err(e) = codec::encode_with_tables(&self.registry, &op.spec, &args) {
             self.result = e.to_string();
             return None;
         }

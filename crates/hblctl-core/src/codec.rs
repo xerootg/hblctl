@@ -53,6 +53,90 @@ pub fn encode(func: &FuncSpec, args: &Map<String, Value>) -> Result<[u8; DATA_SI
     Ok(data)
 }
 
+/// Encode arguments with named integer choices from the registry.
+pub fn encode_with_tables(
+    registry: &crate::registry::Registry,
+    func: &FuncSpec,
+    args: &Map<String, Value>,
+) -> Result<[u8; DATA_SIZE], ArgError> {
+    let mut args = args.clone();
+    for f in &func.request {
+        if let Some(entries) = f.table.as_ref().and_then(|t| registry.tables.get(t)) {
+            let v = args
+                .get(&f.name)
+                .or(f.default.as_ref())
+                .ok_or_else(|| ArgError::Missing(f.name.clone()))?;
+            let n = v
+                .as_str()
+                .and_then(|name| entries.iter().find(|e| e.name == name || e.alias() == name))
+                .map_or_else(|| int(f, v), |e| Ok(i128::from(e.value)))?;
+            if !entries.iter().any(|e| i128::from(e.value) == n) {
+                return Err(invalid(f, "unknown table value"));
+            }
+            let n = i64::try_from(n).map_err(|_| invalid(f, "table value out of range"))?;
+            args.insert(f.name.clone(), json!(n));
+        }
+    }
+    encode(func, &args)
+}
+
+/// Decode table-selected values, retaining ordinary fields and the original buffer.
+/// Derived `field` and `value` members live under `<buffer>_decoded`.
+#[must_use]
+pub fn decode_with_tables(
+    registry: &crate::registry::Registry,
+    func: &FuncSpec,
+    record: &Sutest,
+) -> Map<String, Value> {
+    let original = decode(func, record);
+    let mut out = original.clone();
+    for f in &func.response {
+        let Some(selector) = &f.selector else {
+            continue;
+        };
+        let Some(entries) = f.table.as_ref().and_then(|t| registry.tables.get(t)) else {
+            continue;
+        };
+        let entry = original
+            .get(selector)
+            .and_then(Value::as_i64)
+            .and_then(|n| entries.iter().find(|e| e.value == n));
+        let Ok(b) = record.get(f.offset, f.size()) else {
+            continue;
+        };
+        let mut derived = Map::new();
+        let mut value = json!(crate::hex(b));
+        if let Some(e) = entry {
+            derived.insert("field".into(), json!(e.name));
+            let encoding = e.encoding.as_deref().unwrap_or(&e.ty);
+            if encoding == "utf32" {
+                // Only the declared cells belong to the value; the tail is camera memory.
+                let cells = b.as_chunks::<4>().0;
+                value = json!(
+                    cells[..e.words.min(cells.len())]
+                        .iter()
+                        .map(|w| u32::from_le_bytes(*w))
+                        .take_while(|&cp| cp != 0)
+                        .map(|cp| char::from_u32(cp).unwrap_or(char::REPLACEMENT_CHARACTER))
+                        .collect::<String>()
+                );
+            } else if e.words <= b.len() / 4 {
+                let words = b[..e.words * 4].as_chunks::<4>().0;
+                value = match encoding {
+                    "u8_in_u32" if !words.is_empty() => json!(words[0][0]),
+                    "u32" if !words.is_empty() => json!(u32::from_le_bytes(words[0])),
+                    "s32" if !words.is_empty() => json!(i32::from_le_bytes(words[0])),
+                    "s32_array" => json!(words.iter().map(|w| i32::from_le_bytes(*w)).collect::<Vec<_>>()),
+                    _ => value,
+                };
+            }
+        }
+        derived.insert("value".into(), value);
+        out.insert(format!("{}_decoded", f.name), Value::Object(derived));
+    }
+    out
+}
+
 fn int(f: &Field, v: &Value) -> Result<i128, ArgError> {
     match v {
         Value::Number(n) => n.as_i64().map(i128::from).or_else(|| n.as_u64().map(i128::from)),
@@ -63,7 +147,7 @@ fn int(f: &Field, v: &Value) -> Result<i128, ArgError> {
 }
 
 /// Decimal, or hex with a `0x` prefix.
-fn parse_int(s: &str) -> Option<i128> {
+pub(crate) fn parse_int(s: &str) -> Option<i128> {
     let s = s.trim();
     match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         Some(h) => i128::from_str_radix(h, 16).ok(),
@@ -257,6 +341,8 @@ mod tests {
             offset: 20,
             ty: FieldType::Utf32,
             len: Some(4),
+            table: None,
+            selector: None,
             default: None,
             doc: String::new(),
         };
@@ -290,6 +376,8 @@ mod tests {
             offset: 20,
             ty,
             len: Some(len),
+            table: None,
+            selector: None,
             default: None,
             doc: String::new(),
         };

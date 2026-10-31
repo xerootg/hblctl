@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use hblctl_core::Client;
 use hblctl_core::dispatch::invoke;
-use hblctl_core::registry::{CommandSpec, FuncSpec, Registry, input_schema};
+use hblctl_core::registry::{CommandSpec, FuncSpec, Registry, input_schema_with_tables};
 use hblctl_core::safety::{Policy, Safety};
 use hblctl_transport::Transport;
 use rmcp::ErrorData as McpError;
@@ -57,7 +57,7 @@ pub(crate) fn tools(registry: &Registry, policy: Policy) -> Vec<Tool> {
                     "; layout not fully verified, check raw_result"
                 }
             );
-            let Value::Object(schema) = input_schema(f) else {
+            let Value::Object(schema) = input_schema_with_tables(registry, f) else {
                 unreachable!("input_schema returns an object")
             };
             Tool::new(tool_name(c, f), desc, Arc::new(schema)).with_annotations(
@@ -160,6 +160,20 @@ mod tests {
          "response": [{"name": "value", "offset": 24, "type": "u32"}]},
         {"func": 1, "name": "set", "safety": "persistent",
          "request": [{"name": "field", "offset": 20, "type": "u32"}, {"name": "value", "offset": 24, "type": "u32"}]}]}]}"#;
+
+    #[test]
+    fn production_tool_schema_has_names_and_integers() {
+        let list = tools(&hblctl_core::registry::builtin(), Policy::default());
+        let tool = list.iter().find(|t| t.name == "prod-config__get").unwrap();
+        let choices = &tool.input_schema["properties"]["field_index"]["anyOf"];
+        assert_eq!(choices[0]["type"], "integer");
+        assert!(
+            choices[1]["enum"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("wifi-region"))
+        );
+    }
 
     #[test]
     fn tools_respect_the_ceiling_and_carry_hints() {

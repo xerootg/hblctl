@@ -79,9 +79,20 @@ pub(crate) fn operations(registry: &Registry) -> Vec<Command> {
                 }
                 let mut sub = Command::new(f.name.clone()).about(about);
                 for fld in &f.request {
-                    let mut a = Arg::new(fld.name.clone())
-                        .long(fld.name.replace('_', "-"))
-                        .help(field_help(fld.ty, fld.len, &fld.doc));
+                    let mut a = Arg::new(fld.name.clone()).long(fld.name.replace('_', "-")).help({
+                        let mut help = field_help(fld.ty, fld.len, &fld.doc);
+                        if let Some(entries) = fld.table.as_ref().and_then(|t| registry.tables.get(t)) {
+                            help.push_str("; names: ");
+                            help.push_str(
+                                &entries
+                                    .iter()
+                                    .map(|e| format!("{} ({})", e.alias(), e.name))
+                                    .collect::<Vec<_>>()
+                                    .join(", "),
+                            );
+                        }
+                        help
+                    });
                     match &fld.default {
                         Some(d) => a = a.default_value(json_to_arg(d)),
                         None => a = a.required(true),
@@ -169,6 +180,29 @@ mod tests {
 
     fn app(reg: &Registry) -> Command {
         globals(Command::new("hblctl")).subcommands(operations(reg))
+    }
+
+    #[test]
+    fn production_help_and_names() {
+        let reg = hblctl_core::registry::builtin();
+        for name in ["wifi-region", "13"] {
+            let m = app(&reg)
+                .try_get_matches_from(["hblctl", "prod-config", "get", "--field-index", name])
+                .unwrap();
+            let c = call(&reg, &m).unwrap();
+            let f = reg.command(&c.command).unwrap().func(&c.func).unwrap();
+            assert!(hblctl_core::codec::encode_with_tables(&reg, f, &c.args).is_ok());
+        }
+        let mut cmd = app(&reg);
+        let help = cmd
+            .find_subcommand_mut("prod-config")
+            .unwrap()
+            .find_subcommand_mut("get")
+            .unwrap()
+            .render_long_help()
+            .to_string();
+        assert!(help.contains("wifi-region"));
+        assert!(help.contains("suSerial"));
     }
 
     #[test]
