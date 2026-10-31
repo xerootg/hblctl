@@ -60,7 +60,7 @@ inspected, replayed, and turned into a regression test.
 
 ## Licence
 
-[LGPL-3.0-or-later](COPYING.LESSER) (which incorporates the [GPL-3.0](COPYING)). Contributions are accepted under the
+[LGPL-3.0-or-later](LICENSE) (which incorporates the [GPL-3.0](COPYING)). Contributions are accepted under the
 same licence plus a relicensing grant; see [CONTRIBUTING.md](CONTRIBUTING.md). Not affiliated with Hasselblad or DJI.
 This repository contains no vendor firmware or code; protocol facts were derived independently.
 
