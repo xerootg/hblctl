@@ -11,10 +11,10 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
-hblctl-mods = { path = "../hblctl-mods", version = "0.3.0" }
-hblctl-proto = { path = "../hblctl-proto", version = "0.3.0" }
-hblctl-transport = { path = "../hblctl-transport", version = "0.3.0" }
-hblctl-core = { path = "../hblctl-core", version = "0.3.0" }
+hblctl-mods = { path = "../hblctl-mods", version = "0.4.0" }
+hblctl-proto = { path = "../hblctl-proto", version = "0.4.0" }
+hblctl-transport = { path = "../hblctl-transport", version = "0.4.0" }
+hblctl-core = { path = "../hblctl-core", version = "0.4.0" }
 anyhow = "1"
 clap = { version = "4", features = ["derive", "string"] }
 dirs = "6"
