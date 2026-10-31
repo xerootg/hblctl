@@ -62,8 +62,24 @@ pub(crate) fn run(
                 }
                 match effect {
                     Effect::Invoke(call) => {
-                        let result =
-                            invoke(client.as_mut().expect("connected"), &registry, policy, call).await;
+                        let result = if call.command == "hbl-shell" {
+                            let result: anyhow::Result<Value> = async {
+                                let command = call.args.get("command_utf8_z").and_then(Value::as_str).unwrap_or("");
+                                let spec = registry.command(&call.command).and_then(|c| c.func(&call.func)).ok_or_else(|| anyhow::anyhow!("unknown shell operation"))?;
+                                let data = hblctl_core::codec::encode(spec, &call.args)?;
+                                let delay = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+                                let mut shell = client.as_mut().expect("connected").start_shell_with_delay(policy, command, delay).await?;
+                                let mut output = Vec::new();
+                                while let Some(bytes) = shell.next_output().await? {
+                                    output.extend(bytes);
+                                    let _ = events.send(Event::ShellOutput(String::from_utf8_lossy(&output).into_owned()));
+                                }
+                                Ok(serde_json::json!({"output":String::from_utf8_lossy(&output),"exit_status":shell.wait().await?}))
+                            }.await;
+                            result.map_err(|e| e.to_string())
+                        } else {
+                            invoke(client.as_mut().expect("connected"), &registry, policy, call).await
+                        };
                         // After any failed exchange, drop the stream: its framing/cookie
                         // state may no longer be safe to reuse.
                         if result.is_err() {

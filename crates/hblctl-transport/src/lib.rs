@@ -47,5 +47,8 @@ pub trait Transport {
     /// Send all of `bytes`.
     fn send(&mut self, bytes: &[u8]) -> impl Future<Output = Result<(), Error>> + Send;
     /// Receive the next chunk of bytes. `Ok(None)` means the peer closed the connection.
+    ///
+    /// Must be cancellation safe: dropping a pending receive must not consume bytes.
+    /// Streaming clients select between receiving output and forwarding user input.
     fn recv(&mut self) -> impl Future<Output = Result<Option<Vec<u8>>, Error>> + Send;
 }

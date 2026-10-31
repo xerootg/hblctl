@@ -39,6 +39,7 @@ pub(crate) enum Event {
     Run,
     Reconnect,
     Completed(Result<Value, String>),
+    ShellOutput(String),
     Connection(String),
     Log(String),
     Scroll(i16),
@@ -143,6 +144,7 @@ impl App {
                     Err(e) => format!("Error: {e}"),
                 };
             }
+            Event::ShellOutput(s) => self.result = s,
             Event::Connection(s) => self.connection = s,
             Event::Log(s) => {
                 self.logs.push_back(s);

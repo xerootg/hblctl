@@ -50,8 +50,36 @@ pub async fn invoke<T: Transport>(
     let data = codec::encode_with_tables(registry, f, args)?;
     let args_json = Value::Object(args.clone());
     tracing::info!(target: "hblctl::op", op = %what, cmd = c.id, func = f.func, args = %args_json, "invoke");
+    if c.id == 65 {
+        let command = std::str::from_utf8(&data[4..])
+            .unwrap_or("")
+            .trim_end_matches('\0');
+        let mut shell = client
+            .start_shell_with_delay(
+                policy,
+                command,
+                u32::from_le_bytes([data[0], data[1], data[2], data[3]]),
+            )
+            .await?;
+        let mut output = Vec::new();
+        while let Some(bytes) = shell.next_output().await? {
+            output.extend(bytes);
+        }
+        let exit_status = shell.wait().await?;
+        return Ok(
+            json!({"operation": what, "output": String::from_utf8_lossy(&output), "output_hex": crate::hex(&output), "exit_status": exit_status}),
+        );
+    }
     let out = client.call(c.id, f.func, &data).await?;
-    let status = match &out.status {
+    let wire_status = if c.id == 52 && out.result.u32_at(16).unwrap_or(1) == 1 {
+        Status::Error {
+            code: 0,
+            message: String::new(),
+        }
+    } else {
+        out.status.clone()
+    };
+    let status = match &wire_status {
         Status::Ok => json!("ok"),
         Status::Error { code, message } => json!({"error": {"code": code, "message": message}}),
         Status::Other(x) => json!({"other": x}),

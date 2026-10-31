@@ -143,3 +143,21 @@ Unknown indices omit the derived `field` and retain hex in the derived `value`;
 unsupported encodings also retain hex. The full `raw_result` is unchanged.
 Registry validation reserves `<buffer>_decoded` against ordinary response names,
 allows only one selected response buffer, and rejects request-side selectors.
+
+## Streaming shell
+
+```
+hblctl --allow destructive shell -- 'sha256sum /system/bin/camera-test'
+hblctl --allow destructive shell                   # /bin/sh -i, stdin forwarded
+hblctl --allow destructive shell --script local.sh # script sent through stdin
+```
+
+Shell output streams as raw received bytes; Ctrl-C sends SIGINT to the immediate
+child. The session exclusively owns the connection until completion. `--timeout`
+bounds the entire shell session. The firmware returns only success/failure, so the
+CLI exits 0/1; it cannot reproduce a child's numeric exit code. Firmware may damage
+non-ASCII output or lose large final drains; captures retain the bytes received.
+The TUI's `hbl-shell.start-shell` form streams into its result pane. MCP exposes
+`shell__run` only with the destructive ceiling, returning output, raw output hex,
+and wire exit status. Command 52 runs one executable without arguments; command 73
+runs an already staged `/blackbox/script.sh`, without uploading script contents.

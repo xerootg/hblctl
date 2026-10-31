@@ -36,7 +36,7 @@ pub(crate) fn tool_name(c: &CommandSpec, f: &FuncSpec) -> String {
 /// Every tool visible under `policy`.
 #[must_use]
 pub(crate) fn tools(registry: &Registry, policy: Policy) -> Vec<Tool> {
-    registry
+    let mut result: Vec<Tool> = registry
         .operations()
         .filter(|(_, f)| policy.check("", f.safety).is_ok())
         .map(|(c, f)| {
@@ -68,7 +68,12 @@ pub(crate) fn tools(registry: &Registry, policy: Policy) -> Vec<Tool> {
                     .open_world(false),
             )
         })
-        .collect()
+        .collect();
+    if policy.max == Safety::Destructive {
+        let schema = serde_json::json!({"type":"object","properties":{"command":{"type":"string","maxLength":231}},"required":["command"],"additionalProperties":false});
+        result.push(Tool::new("shell__run", "Run a root shell command; returns output and wire success/failure (not numeric child exit code)", Arc::new(schema.as_object().unwrap().clone())).with_annotations(ToolAnnotations::new().read_only(false).destructive(true).idempotent(false)));
+    }
+    result
 }
 
 /// Split a tool name back into (command, func).
@@ -98,6 +103,22 @@ impl<T> McpServer<T> {
 impl<T: Transport + Send + Sync + 'static> McpServer<T> {
     /// Run one tool call; errors become tool errors the agent can read.
     pub(crate) async fn call(&self, name: &str, args: Map<String, Value>) -> CallToolResult {
+        if name == "shell__run" {
+            let result: anyhow::Result<Value> = async {
+                self.policy.check("shell.run", Safety::Destructive)?;
+                anyhow::ensure!(args.len() == 1, "expected only command");
+                let command = args.get("command").and_then(Value::as_str).ok_or_else(|| anyhow::anyhow!("expected command string"))?;
+                let mut client = self.client.lock().await;
+                let mut session = client.start_shell(self.policy, command).await?;
+                let mut output = Vec::new();
+                while let Some(bytes) = session.next_output().await? { output.extend(bytes); }
+                Ok(serde_json::json!({"output": String::from_utf8_lossy(&output), "output_hex": hblctl_core::hex(&output), "exit_status": session.wait().await?}))
+            }.await;
+            return match result {
+                Ok(v) => CallToolResult::success(vec![Content::text(v.to_string())]),
+                Err(e) => CallToolResult::error(vec![Content::text(e.to_string())]),
+            };
+        }
         let Some((c, f)) = route(name) else {
             return CallToolResult::error(vec![Content::text(format!("unknown tool {name}"))]);
         };
@@ -190,6 +211,36 @@ mod tests {
         assert_eq!(rw.len(), 2);
         assert_eq!(rw[1].annotations.as_ref().unwrap().destructive_hint, Some(true));
         assert_eq!(route("prod-config__get"), Some(("prod-config", "get")));
+    }
+
+    #[tokio::test]
+    async fn shell_tool_requires_destructive_ceiling() {
+        let reg = Registry::from_json(REG).unwrap();
+        assert!(
+            !tools(&reg, Policy::default())
+                .iter()
+                .any(|t| t.name == "shell__run")
+        );
+        assert!(
+            tools(&reg, Policy::up_to(Safety::Destructive))
+                .iter()
+                .any(|t| t.name == "shell__run")
+        );
+        let server = McpServer::new(
+            Client::new(MockTransport::new([]), Duration::from_secs(1), 1),
+            reg,
+            Policy::default(),
+        );
+        assert_eq!(
+            server
+                .call(
+                    "shell__run",
+                    serde_json::json!({"command":"true"}).as_object().unwrap().clone()
+                )
+                .await
+                .is_error,
+            Some(true)
+        );
     }
 
     #[tokio::test]

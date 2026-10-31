@@ -780,8 +780,8 @@
      "func": 1,
      "name": "run-path",
      "safety": "destructive",
-     "doc": "",
-     "verified": false,
+     "doc": "Runs the entire path as an executable with no arguments, without a shell. No stdout/stderr or numeric exit code is returned.",
+     "verified": true,
      "request": [
       {
        "name": "path_utf8_z",
@@ -878,17 +878,18 @@
    "doc": "HblShell",
    "funcs": [
     {
-     "func": 0,
+     "func": 1,
      "name": "start-shell",
      "safety": "destructive",
      "doc": "Any func value is accepted. Initial func ignored. Live output slices use at most232 UTF-8 bytes per chunk, although slicing/counts use QString units: non-ASCII may be truncated. No length prefix; full232 bytes may lack NUL. Final output notification uses Latin-1 conversion then final shared ok/error.",
-     "verified": false,
+     "verified": true,
      "request": [
       {
        "name": "output_delay_parameter",
        "offset": 16,
        "type": "u32",
-       "doc": "0 selects 10 ms; otherwise unsigned remainder modulo100 with zero remainder replaced by100."
+       "doc": "0 selects 10 ms; otherwise unsigned remainder modulo100 with zero remainder replaced by100.",
+       "default": 0
       },
       {
        "name": "command_utf8_z",
@@ -951,8 +952,8 @@
      "func": 1,
      "name": "run-staged-script",
      "safety": "destructive",
-     "doc": "",
-     "verified": false,
+     "doc": "Runs the pre-staged /blackbox/script.sh directly with empty argv. No inline upload or output stream. Success removes the script; failure removes script and output. Capture overwrites the output file prefix for each accepted chunk.",
+     "verified": true,
      "request": [
       {
        "name": "output_limit_bytes",
