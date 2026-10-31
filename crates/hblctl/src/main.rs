@@ -14,6 +14,7 @@ mod logging;
 mod mcp;
 mod mods;
 mod session;
+mod shell;
 mod tui;
 
 use std::path::PathBuf;
@@ -49,6 +50,7 @@ fn app(reg: &Registry) -> Command {
                 .arg(Arg::new("hex").long("hex").action(ArgAction::SetTrue).help("Also print chunk bytes")),
         ),
     )
+    .subcommand(shell::command())
     .subcommand(mods::command())
     .subcommand(Command::new("sessions").about("Print where session logs and captures are written"))
     .subcommands(cli::operations(reg))
@@ -75,11 +77,24 @@ fn load_registry(args: &[String]) -> Result<Registry> {
     }
 }
 
+fn validate_cli_registry(reg: &Registry) -> Result<()> {
+    anyhow::ensure!(
+        !reg.commands.iter().any(|c| c.name == "shell"),
+        "registry command collision with built-in shell subcommand"
+    );
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let argv: Vec<String> = std::env::args().collect();
     let reg = load_registry(&argv)?;
+    validate_cli_registry(&reg)?;
     let m = app(&reg).get_matches_from(&argv);
     match m.subcommand() {
+        Some(("shell", sm)) => {
+            let status = shell::run(&m, sm, &argv)?;
+            std::process::exit(i32::from(status));
+        }
         Some(("mods", mm)) => mods::run(&m, mm, &argv),
         Some(("ops", _)) => {
             for (c, f) in reg.operations() {
@@ -142,7 +157,11 @@ fn run_camera(m: &ArgMatches, argv: &[String], reg: Registry, mcp_mode: bool) ->
         match call {
             None => {
                 use rmcp::ServiceExt as _;
-                let server = mcp::McpServer::new(client, reg, policy);
+                let camera = std::sync::Arc::new(camera);
+                let server = mcp::McpServer::new(client, reg, policy).with_reconnect(Box::new(move || {
+                    let camera = camera.clone();
+                    Box::pin(async move { camera.connect().await })
+                }));
                 let running = server
                     .serve(rmcp::transport::stdio())
                     .await
@@ -170,6 +189,18 @@ fn initial_cookie() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell_cli_collision_is_rejected() {
+        let mut reg = registry::builtin();
+        reg.commands[0].name = "shell".into();
+        assert!(
+            validate_cli_registry(&reg)
+                .unwrap_err()
+                .to_string()
+                .contains("shell")
+        );
+    }
 
     #[test]
     fn registry_flag_forms() {

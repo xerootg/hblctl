@@ -36,9 +36,8 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &App) {
     operations(frame, app, cols[0]);
     form(frame, app, right[0]);
     frame.render_widget(
-        Paragraph::new(app.result.as_str())
+        Paragraph::new(result_window(&app.result, app.scroll))
             .wrap(Wrap { trim: false })
-            .scroll((app.scroll, 0))
             .block(Block::bordered().title("Result | PgUp/PgDn scroll")),
         right[1],
     );
@@ -83,6 +82,20 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &App) {
             popup,
         );
     }
+}
+
+pub(crate) fn result_window(result: &str, scroll: usize) -> &str {
+    let lines = result.lines().count();
+    let skip = scroll.min(lines.saturating_sub(1));
+    let start = if skip == 0 {
+        0
+    } else {
+        result
+            .match_indices('\n')
+            .nth(skip - 1)
+            .map_or(result.len(), |(i, _)| i + 1)
+    };
+    &result[start..]
 }
 
 fn block(title: &str, active: bool) -> Block<'_> {

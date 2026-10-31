@@ -143,3 +143,33 @@ Unknown indices omit the derived `field` and retain hex in the derived `value`;
 unsupported encodings also retain hex. The full `raw_result` is unchanged.
 Registry validation reserves `<buffer>_decoded` against ordinary response names,
 allows only one selected response buffer, and rejects request-side selectors.
+
+## Streaming shell
+
+```
+hblctl --allow destructive shell -- 'sha256sum /system/bin/camera-test'
+hblctl --allow destructive shell --script local.sh # entire script in initial command (231 bytes max)
+```
+
+Pass exactly one complete command string. Empty commands and interactive forwarding
+are refused by CLI, TUI and MCP. The bridge treats each TCP read as one message
+and offers no stdin acknowledgement or framing; stdin uploads are therefore refused
+by the session API, including multi-record scripts. Scripts must fit in the initial
+231-byte UTF-8 command record and execute with `/bin/sh -c`. No pacing assumption
+or TCP write boundary is used for uploads. The protocol has no stdin-close indication:
+EOF cannot be forwarded, and the CLI never injects `exit` text. ETX is rejected as
+stdin data. `interrupt()` and `kill()` are unavailable: control records cannot be
+distinguished from starts or reliably delivered by the bridge. Ctrl-C ends the local
+session and discards the connection; it cannot stop the remote child. Reconnect
+after an unfinished session. The whole-session timeout also bounds waits for stdout.
+The firmware returns only success/failure, not the child's numeric exit code.
+
+Dispatcher and MCP captures retain at most 4 MiB of raw output and report
+`truncated: true` when discarding excess bytes, while continuing to drain.
+The TUI retains at most 4 MiB of decoded output plus a truncation marker and
+completion status. Its streamed lines remain visible after completion or errors.
+
+The TUI's `hbl-shell.start-shell` form streams into its result pane. MCP exposes
+`shell__run` only with the destructive ceiling, returning output, raw output hex,
+and wire exit status. Command 52 runs one executable without arguments; command 73
+runs an already staged `/blackbox/script.sh`, without uploading script contents.
