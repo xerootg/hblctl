@@ -12,8 +12,10 @@ fn unhex(s: &str) -> Vec<u8> {
 }
 #[tokio::test]
 async fn exact_example_split_reads() {
-    let v: serde_json::Value =
-        serde_json::from_str(include_str!("../../../reference/pass4_example.json")).unwrap();
+    let v: serde_json::Value = serde_json::from_str(include_str!(
+        "../tests/fixtures/x2d-4.2.0-shell-pass4-example.json"
+    ))
+    .unwrap();
     let mut wire = Vec::new();
     for r in v["one_valid_reply_sequence"].as_array().unwrap() {
         let mut b = unhex(r["known_tcp_prefix_260_bytes_hex"].as_str().unwrap());
