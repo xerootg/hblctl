@@ -110,9 +110,10 @@ pub fn decode_with_tables(
             derived.insert("field".into(), json!(e.name));
             let encoding = e.encoding.as_deref().unwrap_or(&e.ty);
             if encoding == "utf32" {
+                // Only the declared cells belong to the value; the tail is camera memory.
+                let cells = b.as_chunks::<4>().0;
                 value = json!(
-                    b.as_chunks::<4>()
-                        .0
+                    cells[..e.words.min(cells.len())]
                         .iter()
                         .map(|w| u32::from_le_bytes(*w))
                         .take_while(|&cp| cp != 0)
@@ -146,7 +147,7 @@ fn int(f: &Field, v: &Value) -> Result<i128, ArgError> {
 }
 
 /// Decimal, or hex with a `0x` prefix.
-fn parse_int(s: &str) -> Option<i128> {
+pub(crate) fn parse_int(s: &str) -> Option<i128> {
     let s = s.trim();
     match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         Some(h) => i128::from_str_radix(h, 16).ok(),

@@ -51,6 +51,8 @@ fn tables_are_strictly_validated() {
     let original: serde_json::Value = serde_json::from_str(registry::X2D_4_2_0).unwrap();
     for (key, value) in [
         ("name", json!("suSerial")),
+        ("name", json!("13")),
+        ("name", json!("0x0d")),
         ("value", json!(0)),
         ("value", json!(i64::MAX)),
     ] {
@@ -123,12 +125,19 @@ fn all_declared_fields_decode_without_using_the_tail() {
             .unwrap();
         rec.put(24, &[0xff; 228]).unwrap();
         if e.value == 0 {
-            rec.put(24, &[0x80, 0xf6, 1, 0, 0, 0, 0, 0]).unwrap();
+            // Ten declared cells of 'A' with no terminator, then tail cells of 'B':
+            // the tail must never leak into the decoded serial.
+            let mut cells = [0u8; 44];
+            for c in cells.chunks_mut(4).take(10) {
+                c.copy_from_slice(&0x41u32.to_le_bytes());
+            }
+            cells[40..44].copy_from_slice(&0x42u32.to_le_bytes());
+            rec.put(24, &cells).unwrap();
         }
         let out = codec::decode_with_tables(&r, f, &rec);
         assert_eq!(out["values_decoded"]["field"], e.name);
         match e.value {
-            0 => assert_eq!(out["values_decoded"]["value"], "🚀"),
+            0 => assert_eq!(out["values_decoded"]["value"], "A".repeat(10)),
             1 | 2 | 5..=9 | 14..=17 | 23 | 24 => assert_eq!(out["values_decoded"]["value"], 255),
             3 | 13 | 18..=20 | 30 => assert_eq!(out["values_decoded"]["value"], u32::MAX),
             27 => assert_eq!(out["values_decoded"]["value"], -1),

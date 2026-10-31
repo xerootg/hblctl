@@ -212,8 +212,15 @@ impl Registry {
                     return Err(Invalid(format!("table {name}: duplicate or empty name/value")));
                 }
                 let alias = e.alias();
-                if alias != e.name && !names.insert(alias) {
+                if alias != e.name && !names.insert(alias.clone()) {
                     return Err(Invalid(format!("table {name}: ambiguous alias")));
+                }
+                // A name that spells an integer would resolve differently as text and as JSON.
+                if crate::codec::parse_int(&e.name).is_some() || crate::codec::parse_int(&alias).is_some() {
+                    return Err(Invalid(format!(
+                        "table {name}: name {} spells an integer",
+                        e.name
+                    )));
                 }
             }
         }
