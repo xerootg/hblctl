@@ -83,7 +83,7 @@ pub async fn invoke<T: Transport>(
             "operation": what, "status": status,
             "fields": codec::decode_with_tables(registry, f, record),
             "raw_result": crate::hex(&record.encode()), "verified_layout": f.verified,
-            "progress": [], "stray_frames": 0,
+            "progress": [], "stray_frames": shell.stray_frames(),
             "notifications": shell.notifications().iter().map(|n| crate::hex(&n.encode())).collect::<Vec<_>>(),
             "notifications_truncated": shell.notifications_truncated(),
             "output": String::from_utf8_lossy(&output.bytes), "output_hex": crate::hex(&output.bytes),
@@ -156,6 +156,7 @@ mod tests {
         let final_record = Sutest::new(65, 1, 9);
         let steps = std::iter::once(Step::Expect(BusFrame::command(request).encode()))
             .chain((0..1100).map(|_| Step::Reply(frame(notification.clone()))))
+            .chain(std::iter::once(Step::Reply(frame(Sutest::new(49, 2, 9)))))
             .chain(std::iter::once(Step::Reply(frame(final_record.clone()))));
         let mut client = Client::new(MockTransport::new(steps), Duration::from_secs(10), 1);
         let result = invoke(
@@ -169,6 +170,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(result["status"], "ok");
+        assert_eq!(result["stray_frames"], 1);
         assert!(result["fields"].is_object());
         assert_eq!(result["raw_result"], crate::hex(&final_record.encode()));
         assert!(result["verified_layout"].is_boolean());

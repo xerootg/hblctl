@@ -9,7 +9,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Style},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 
@@ -36,9 +36,13 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &App) {
     operations(frame, app, cols[0]);
     form(frame, app, right[0]);
     frame.render_widget(
-        Paragraph::new(result_window(&app.result, app.scroll))
-            .wrap(Wrap { trim: false })
-            .block(Block::bordered().title("Result | PgUp/PgDn scroll")),
+        Paragraph::new(result_window(
+            &app.result,
+            app.scroll,
+            right[1].width.saturating_sub(2),
+            usize::from(right[1].height.saturating_sub(2)),
+        ))
+        .block(Block::bordered().title("Result | PgUp/PgDn scroll")),
         right[1],
     );
     let log_height = usize::from(rows[2].height.saturating_sub(2));
@@ -84,18 +88,37 @@ pub(crate) fn draw(frame: &mut Frame<'_>, app: &App) {
     }
 }
 
-pub(crate) fn result_window(result: &str, scroll: usize) -> &str {
-    let lines = result.lines().count();
-    let skip = scroll.min(lines.saturating_sub(1));
-    let start = if skip == 0 {
-        0
-    } else {
-        result
-            .match_indices('\n')
-            .nth(skip - 1)
-            .map_or(result.len(), |(i, _)| i + 1)
-    };
-    &result[start..]
+// Wrap explicitly so row offsets and window slicing remain usize throughout.
+// Result text uses hard wrapping at grapheme boundaries, including wide characters.
+pub(crate) fn result_window(result: &str, scroll: usize, width: u16, height: usize) -> String {
+    if width == 0 || height == 0 {
+        return String::new();
+    }
+    let mut rows = Vec::new();
+    for line in result.lines() {
+        let span = Span::raw(line);
+        let mut row = String::new();
+        let mut used = 0;
+        for grapheme in span.styled_graphemes(Style::default()) {
+            let size = Span::raw(grapheme.symbol).width();
+            if size > usize::from(width) {
+                continue;
+            }
+            if used + size > usize::from(width) {
+                rows.push(std::mem::take(&mut row));
+                used = 0;
+            }
+            row.push_str(grapheme.symbol);
+            used += size;
+        }
+        rows.push(row);
+    }
+    let skip = scroll.min(rows.len().saturating_sub(1));
+    rows.into_iter()
+        .skip(skip)
+        .take(height)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn block(title: &str, active: bool) -> Block<'_> {

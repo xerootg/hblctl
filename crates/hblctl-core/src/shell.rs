@@ -17,6 +17,7 @@ pub struct ShellSession<'a, T> {
     result: Option<Sutest>,
     notifications: Vec<Sutest>,
     notifications_truncated: bool,
+    stray_frames: usize,
     cookie: u32,
     deadline: tokio::time::Instant,
 }
@@ -56,6 +57,7 @@ impl<T: Transport> Client<T> {
             result: None,
             notifications: Vec::new(),
             notifications_truncated: false,
+            stray_frames: 0,
             cookie,
             deadline,
         };
@@ -134,7 +136,8 @@ impl<T: Transport> ShellSession<'_, T> {
             if let Some(frame) = self.pending.pop_front() {
                 tracing::debug!(target: "hblctl::proto", header = ?frame.header, record = ?frame.record, "shell receive");
                 let r = frame.record;
-                if frame.header.signal != SIGNAL_TEST_TX || r.cmd != 65 {
+                if frame.header.signal != SIGNAL_TEST_TX || r.cmd != 65 || !matches!(r.func, 1 | 4) {
+                    self.stray_frames += 1;
                     continue;
                 }
                 if r.func == 4 {
@@ -169,6 +172,12 @@ impl<T: Transport> ShellSession<'_, T> {
             }
         }
     }
+    /// Number of unrelated frames discarded during this session.
+    #[must_use]
+    pub fn stray_frames(&self) -> usize {
+        self.stray_frames
+    }
+
     /// Final wire record, available after completion.
     #[must_use]
     pub fn result(&self) -> Option<&Sutest> {

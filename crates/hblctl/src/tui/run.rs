@@ -354,9 +354,21 @@ mod tests {
             app.update(Event::Scroll(5));
         }
         assert!(app.scroll > 65_535);
-        assert!(view::result_window(&app.result, app.scroll).contains("exit_status: 0"));
+        assert!(view::result_window(&app.result, app.scroll, 20, 5).contains("exit_status: 0"));
         let wrapped = format!("{}\nexit_status: 0\n", "x".repeat(70_000));
-        assert_eq!(view::result_window(&wrapped, usize::MAX), "exit_status: 0\n");
+        assert_eq!(view::result_window(&wrapped, usize::MAX, 20, 5), "exit_status: 0");
+    }
+
+    #[test]
+    fn scroll_reaches_wrapped_rows_in_narrow_pane() {
+        let line = "abcdefghijklmnopqrstuvwx";
+        assert_eq!(view::result_window("界界e\u{301}界", 1, 4, 2), "e\u{301}界");
+        assert_eq!(view::result_window("abc", 1, 0, 2), "");
+        assert_eq!(view::result_window(line, 2, 4, 2), "ijkl\nmnop");
+        let result = format!("{line}\ndone");
+        assert_eq!(view::result_window(&result, 2, 4, 2), "ijkl\nmnop");
+        assert_eq!(view::result_window(&result, 5, 4, 2), "uvwx\ndone");
+        assert_eq!(view::result_window(&"x".repeat(70_001), 70_000, 1, 2), "x");
     }
 
     #[tokio::test]
