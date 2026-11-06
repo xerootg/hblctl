@@ -26,7 +26,7 @@ thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "time", "net", "io-util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["json", "env-filter", "fmt"] }
-uniffi = { version = "0.29", default-features = false }
+uniffi = { version = "0.32", default-features = false }
 
 [dev-dependencies]
 hblctl-proto = { path = "../hblctl-proto", version = "0.3.0" }
