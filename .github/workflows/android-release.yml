@@ -43,7 +43,7 @@ jobs:
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" 'platforms;android-35' 'build-tools;35.0.0' 'ndk;29.0.14206865'
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/29.0.14206865" >> "$GITHUB_ENV"
       # Gradle version comes from android/gradle/wrapper (pinned to 9.0.0; AGP 8.13 needs <= 9.5).
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
       - run: cargo install cargo-ndk --locked
       - run: cargo fetch --locked
       # Signed with the project's release key so Obtainium and manual installs update in place across versions.
