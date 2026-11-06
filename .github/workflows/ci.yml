@@ -111,7 +111,7 @@ jobs:
       - run: cargo fetch --locked
       - run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
         working-directory: android
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: hblctl-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
