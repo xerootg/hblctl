@@ -173,7 +173,7 @@ pub trait ByteStream: Send + Sync {
     /// Block up to `timeout_ms` for the next bytes. Return them (never empty), `None` once the peer has
     /// closed the stream, or [`StreamError::Timeout`] if nothing arrived. The wait must honour
     /// `timeout_ms`: hblctl cannot interrupt a blocked call. `timeout_ms` is what is left of the
-    /// session timeout since the last `send`, so it shrinks while one reply arrives in pieces.
+    /// session timeout since the last `send` returned, so it shrinks while one reply arrives in pieces.
     fn recv(&self, timeout_ms: u64) -> Result<Option<Vec<u8>>, StreamError>;
     /// Release the stream. Called exactly once, when the session disconnects, loses the link, or fails
     /// to start. Errors are logged and otherwise ignored.
@@ -182,12 +182,12 @@ pub trait ByteStream: Send + Sync {
 /// Adapts a [`ByteStream`] to [`Transport`] and closes it when dropped.
 ///
 /// The host's calls block and complete immediately as far as tokio is concerned, so the client's
-/// per-command deadline cannot interrupt them. `HostStream` enforces it instead: each `send` starts a
+/// per-command deadline cannot interrupt them. `HostStream` enforces it instead: each completed `send` starts a
 /// `read_timeout` budget, and every `recv` asks the host to wait only for what is left of it.
 struct HostStream {
     stream: Box<dyn ByteStream>,
     read_timeout: Duration,
-    /// When the reply to the last send is due; `None` before the first send.
+    /// When the reply to the last completed send is due; `None` before the first.
     deadline: Option<Instant>,
 }
 impl HostStream {
@@ -200,10 +200,13 @@ impl HostStream {
         }
     }
     fn send_now(&mut self, bytes: &[u8]) -> Result<(), hblctl_transport::Error> {
-        self.deadline = Some(Instant::now() + self.read_timeout);
         self.stream
             .send(bytes.to_vec())
-            .map_err(|e| self.transport_error(e))
+            .map_err(|e| self.transport_error(e))?;
+        // Like the client's own deadline, the budget starts once the bytes are out, so a slow write
+        // does not eat into the time the camera has to answer.
+        self.deadline = Some(Instant::now() + self.read_timeout);
+        Ok(())
     }
     fn recv_now(&self) -> Result<Option<Vec<u8>>, hblctl_transport::Error> {
         let left = self
@@ -690,6 +693,7 @@ mod tests {
         replies: Arc<Mutex<std::collections::VecDeque<Recv>>>,
         timeouts: Arc<Mutex<Vec<u64>>>,
         closes: Arc<Mutex<u32>>,
+        send_delay: Arc<Mutex<Duration>>,
     }
     impl ScriptedStream {
         fn new(replies: impl IntoIterator<Item = Recv>) -> Self {
@@ -703,6 +707,7 @@ mod tests {
     }
     impl ByteStream for ScriptedStream {
         fn send(&self, bytes: Vec<u8>) -> Result<(), StreamError> {
+            std::thread::sleep(*self.send_delay.lock().unwrap());
             self.sent.lock().unwrap().push(bytes);
             Ok(())
         }
@@ -755,6 +760,21 @@ mod tests {
         assert_eq!(budget_ms(Duration::from_millis(1)), Some(1));
         assert_eq!(budget_ms(Duration::from_micros(1001)), Some(2));
         assert_eq!(budget_ms(Duration::MAX), Some(u64::MAX));
+    }
+    #[test]
+    fn a_slow_send_leaves_the_reply_its_whole_budget() {
+        let dir = tempfile::tempdir().unwrap();
+        let (command, func, _, reply) = read_exchange();
+        let stream = ScriptedStream::new([Recv::Bytes(reply)]);
+        // The write takes longer than the whole timeout; the buffered reply must still be read.
+        *stream.send_delay.lock().unwrap() = Duration::from_millis(150);
+        let session = stream_session_with_timeout(&stream, dir.path(), 100).unwrap();
+        let result = session.invoke(command, func, "{}".into()).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&result).unwrap()["status"],
+            "ok"
+        );
+        assert!(stream.timeouts.lock().unwrap()[0] > 50);
     }
     #[test]
     fn host_stream_keeps_the_command_deadline_across_chunks() {

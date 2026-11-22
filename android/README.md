@@ -127,8 +127,8 @@ The rules, which the library relies on:
 - **`recv` must return within `timeoutMs`.** Rust cannot interrupt a blocked call. Throw
   `StreamException.Timeout` when nothing arrived; the session then reports
   `transport: ... timed out after 5s` and disconnects, exactly as it does over TCP.
-  `timeoutMs` is what is left of the session timeout since the last `send`, so a reply that
-  trickles in still has to arrive within one timeout.
+  `timeoutMs` is what is left of the session timeout since the last `send` returned, so a reply
+  that trickles in still has to arrive within one timeout.
 - Return `null` only when the camera closed the stream. Never return an empty array.
 - Throw `StreamException.Io(detail)` for a broken stream; `detail` appears in the error the user sees.
 - `close()` is called exactly once: on `disconnect()`, when the link fails, when the session is closed
