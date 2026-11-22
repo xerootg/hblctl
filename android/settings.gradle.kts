@@ -4,4 +4,5 @@
 pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
 dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
 rootProject.name = "hblctl-android"
-include(":app")
+// :lib is the published AAR (Kotlin bindings plus native libraries); :app is the reference app built on it.
+include(":lib", ":app")

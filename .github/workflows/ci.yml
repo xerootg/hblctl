@@ -88,7 +88,7 @@ jobs:
           baseline-rev: origin/${{ github.base_ref }}
 
   android:
-    name: Android APK and Kotlin tests
+    name: Android APK, AAR and Kotlin tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -109,9 +109,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-ndk --locked
       - run: cargo fetch --locked
-      - run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
+      - run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug :lib:publishReleasePublicationToLocalRepository
+        working-directory: android
+      # Resolves the AAR from the local Maven repository like an outside app and calls through it, using
+      # the host build of hblctl-ffi that build-rust.sh left in target/debug.
+      - run: ./gradlew --no-daemon -p consumer-smoke testDebugUnitTest
         working-directory: android
       - uses: actions/upload-artifact@v4
         with:
           name: hblctl-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hblctl-ffi-aar
+          path: android/lib/build/repo/org/hblctl/hblctl-ffi/*/hblctl-ffi-*.aar

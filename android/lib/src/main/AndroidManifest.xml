@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SPDX-FileCopyrightText: 2026 Haley Grandle -->
+<!-- SPDX-License-Identifier: LGPL-3.0-or-later -->
+<!-- Session.connect opens a TCP socket to the camera, so every app using the library needs this. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+</manifest>

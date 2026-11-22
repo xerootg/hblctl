@@ -1,9 +1,11 @@
 # SPDX-FileCopyrightText: 2026 Haley Grandle
 # SPDX-License-Identifier: LGPL-3.0-or-later
-name: Android release APK
+name: Android release APK and AAR
 # Runs after release-plz creates a release (workflow_call), for releases published by hand
 # (release event), or on demand for an existing tag (workflow_dispatch). A release made with the
 # built-in GITHUB_TOKEN does not fire the release event, which is why release-plz calls this directly.
+# From v0.4.0 on it also builds the hblctl-ffi AAR, attaches it to the release and publishes it to
+# GitHub Packages as org.hblctl:hblctl-ffi (see android/README.md for consumers).
 on:
   release:
     types: [published]
@@ -15,16 +17,19 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to attach the APK to (e.g. v0.1.0)
+        description: Existing release tag to attach the APK (and, from v0.4.0, the AAR) to, e.g. v0.4.0
         required: true
         type: string
 permissions:
   contents: write
+  packages: write
 jobs:
   android-release:
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+      # Optimised native libraries for both the APK and the AAR.
+      HBLCTL_RUST_PROFILE: release
     steps:
       - uses: actions/checkout@v7
         with:
@@ -62,12 +67,50 @@ jobs:
           fi
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
-      - run: ./gradlew --no-daemon :app:testDebugUnitTest ":app:$APK_TASK"
+      # Tags before v0.4.0 have no library module; for those only the APK is rebuilt.
+      - run: |
+          if [ -f android/lib/build.gradle.kts ]; then
+            echo "HAS_AAR=true" >> "$GITHUB_ENV"
+            echo "LIB_TASKS=:lib:publishReleasePublicationToLocalRepository" >> "$GITHUB_ENV"
+          else
+            echo "HAS_AAR=false" >> "$GITHUB_ENV"
+          fi
+      - run: ./gradlew --no-daemon :app:testDebugUnitTest ":app:$APK_TASK" $LIB_TASKS
         working-directory: android
         env:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      # The AAR is checked the way the companion app will use it before anything is published.
+      - if: env.HAS_AAR == 'true'
+        run: ./gradlew --no-daemon -p consumer-smoke testDebugUnitTest "-PhblctlVersion=${RELEASE_TAG#v}"
+        working-directory: android
       - run: cp "$APK_SRC" "$APK_NAME"
       - run: gh release upload "$RELEASE_TAG" "$APK_NAME" --clobber
         env:
           GH_TOKEN: ${{ github.token }}
+      - if: env.HAS_AAR == 'true'
+        run: |
+          version="${RELEASE_TAG#v}"
+          aar="android/lib/build/repo/org/hblctl/hblctl-ffi/$version/hblctl-ffi-$version.aar"
+          if [ ! -f "$aar" ]; then
+            echo "::error::$aar not found: Cargo.toml's workspace version does not match the tag $RELEASE_TAG"
+            exit 1
+          fi
+          cp "$aar" "hblctl-ffi-$RELEASE_TAG.aar"
+          gh release upload "$RELEASE_TAG" "hblctl-ffi-$RELEASE_TAG.aar" --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+      # GitHub Packages versions are immutable, so a re-run for a tag that is already published skips this.
+      - if: env.HAS_AAR == 'true'
+        run: |
+          version="${RELEASE_TAG#v}"
+          pom="https://maven.pkg.github.com/${GITHUB_REPOSITORY}/org/hblctl/hblctl-ffi/$version/hblctl-ffi-$version.pom"
+          status=$(curl -s -o /dev/null -w '%{http_code}' -u "$GITHUB_ACTOR:$GITHUB_TOKEN" "$pom")
+          if [ "$status" = 200 ]; then
+            echo "::notice::org.hblctl:hblctl-ffi:$version is already on GitHub Packages; not republishing"
+          else
+            ./gradlew --no-daemon :lib:publishReleasePublicationToGitHubPackagesRepository
+          fi
+        working-directory: android
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
