@@ -21,7 +21,7 @@ use std::{
     io::Write as _,
     path::Path,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tracing_subscriber::fmt::writer::MakeWriterExt;
 uniffi::setup_scaffolding!();
@@ -172,16 +172,23 @@ pub trait ByteStream: Send + Sync {
     fn send(&self, bytes: Vec<u8>) -> Result<(), StreamError>;
     /// Block up to `timeout_ms` for the next bytes. Return them (never empty), `None` once the peer has
     /// closed the stream, or [`StreamError::Timeout`] if nothing arrived. The wait must honour
-    /// `timeout_ms`: hblctl cannot interrupt a blocked call.
+    /// `timeout_ms`: hblctl cannot interrupt a blocked call. `timeout_ms` is what is left of the
+    /// session timeout since the last `send`, so it shrinks while one reply arrives in pieces.
     fn recv(&self, timeout_ms: u64) -> Result<Option<Vec<u8>>, StreamError>;
     /// Release the stream. Called exactly once, when the session disconnects, loses the link, or fails
     /// to start. Errors are logged and otherwise ignored.
     fn close(&self) -> Result<(), StreamError>;
 }
 /// Adapts a [`ByteStream`] to [`Transport`] and closes it when dropped.
+///
+/// The host's calls block and complete immediately as far as tokio is concerned, so the client's
+/// per-command deadline cannot interrupt them. `HostStream` enforces it instead: each `send` starts a
+/// `read_timeout` budget, and every `recv` asks the host to wait only for what is left of it.
 struct HostStream {
     stream: Box<dyn ByteStream>,
     read_timeout: Duration,
+    /// When the reply to the last send is due; `None` before the first send.
+    deadline: Option<Instant>,
 }
 impl HostStream {
     fn transport_error(&self, e: StreamError) -> hblctl_transport::Error {
@@ -192,13 +199,20 @@ impl HostStream {
             }
         }
     }
-    fn send_now(&self, bytes: &[u8]) -> Result<(), hblctl_transport::Error> {
+    fn send_now(&mut self, bytes: &[u8]) -> Result<(), hblctl_transport::Error> {
+        self.deadline = Some(Instant::now() + self.read_timeout);
         self.stream
             .send(bytes.to_vec())
             .map_err(|e| self.transport_error(e))
     }
     fn recv_now(&self) -> Result<Option<Vec<u8>>, hblctl_transport::Error> {
-        let timeout_ms = u64::try_from(self.read_timeout.as_millis()).unwrap_or(u64::MAX);
+        let left = self
+            .deadline
+            .map_or(self.read_timeout, |d| d.saturating_duration_since(Instant::now()));
+        let timeout_ms = u64::try_from(left.as_millis()).unwrap_or(u64::MAX);
+        if timeout_ms == 0 {
+            return Err(hblctl_transport::Error::Timeout(self.read_timeout));
+        }
         match self.stream.recv(timeout_ms) {
             Ok(Some(bytes)) if bytes.is_empty() => Err(hblctl_transport::Error::Io(std::io::Error::other(
                 "app byte stream returned an empty chunk: return null at end of stream, \
@@ -369,6 +383,7 @@ impl Session {
         let link = Link::Stream(HostStream {
             stream,
             read_timeout: timeout,
+            deadline: None,
         });
         let runtime = runtime()?;
         let (capture, log) = files(
@@ -427,6 +442,18 @@ impl Session {
     /// Last known connection state; peer closure is detected on invocation.
     pub fn is_connected(&self) -> Result<bool, Error> {
         Ok(self.inner.lock().map_err(session_error)?.client.is_some())
+    }
+}
+impl Drop for Session {
+    /// A session dropped while connected (Kotlin `close()`, `use`, or the garbage collector) releases
+    /// its link inside the session log, so a failing host stream `close()` is still recorded.
+    fn drop(&mut self) {
+        let inner = match self.inner.get_mut() {
+            Ok(inner) => inner,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let link = inner.client.take();
+        tracing::dispatcher::with_default(&self.log, || drop(link));
     }
 }
 fn runtime() -> Result<tokio::runtime::Runtime, Error> {
@@ -644,6 +671,8 @@ mod tests {
     /// What a scripted host stream does on each `recv`.
     enum Recv {
         Bytes(Vec<u8>),
+        /// The bytes arrive after this long; a well-behaved host gives up at `timeout_ms` instead.
+        Late(Duration, Vec<u8>),
         Timeout,
         Closed,
     }
@@ -672,8 +701,18 @@ mod tests {
         }
         fn recv(&self, timeout_ms: u64) -> Result<Option<Vec<u8>>, StreamError> {
             self.timeouts.lock().unwrap().push(timeout_ms);
-            match self.replies.lock().unwrap().pop_front() {
+            let next = self.replies.lock().unwrap().pop_front();
+            match next {
                 Some(Recv::Bytes(b)) => Ok(Some(b)),
+                Some(Recv::Late(delay, b)) => {
+                    let limit = Duration::from_millis(timeout_ms);
+                    std::thread::sleep(delay.min(limit));
+                    if delay > limit {
+                        Err(StreamError::Timeout)
+                    } else {
+                        Ok(Some(b))
+                    }
+                }
                 Some(Recv::Timeout) => Err(StreamError::Timeout),
                 Some(Recv::Closed) | None => Ok(None),
             }
@@ -686,13 +725,44 @@ mod tests {
         }
     }
     fn stream_session(stream: &ScriptedStream, dir: &Path) -> Result<Session, Error> {
+        stream_session_with_timeout(stream, dir, 750)
+    }
+    fn stream_session_with_timeout(
+        stream: &ScriptedStream,
+        dir: &Path,
+        timeout_ms: u64,
+    ) -> Result<Session, Error> {
         Session::connect_stream(
             Box::new(stream.clone()),
             "adb tcp:30303".into(),
-            750,
+            timeout_ms,
             Safety::Read,
             dir.to_string_lossy().into_owned(),
         )
+    }
+    #[test]
+    fn host_stream_keeps_the_command_deadline_across_chunks() {
+        let dir = tempfile::tempdir().unwrap();
+        let (command, func, _, reply) = read_exchange();
+        let (head, tail) = reply.split_at(5);
+        // Each chunk alone fits in the 300 ms timeout; together they do not.
+        let late = Duration::from_millis(200);
+        let stream = ScriptedStream::new([Recv::Late(late, head.to_vec()), Recv::Late(late, tail.to_vec())]);
+        let session = stream_session_with_timeout(&stream, dir.path(), 300).unwrap();
+        let started = Instant::now();
+        match session.invoke(command, func, "{}".into()) {
+            Err(Error::Transport { detail }) => assert!(detail.contains("timed out"), "{detail}"),
+            other => panic!("a reply that misses the deadline must fail, got {other:?}"),
+        }
+        assert!(
+            started.elapsed() < Duration::from_millis(450),
+            "the call took {:?}",
+            started.elapsed()
+        );
+        let timeouts = stream.timeouts.lock().unwrap().clone();
+        assert_eq!(timeouts.len(), 2);
+        assert!(timeouts[0] <= 300 && timeouts[1] <= 100, "{timeouts:?}");
+        assert_eq!(stream.closes(), 1);
     }
     #[test]
     fn host_stream_carries_the_protocol_and_is_recorded() {
@@ -708,7 +778,7 @@ mod tests {
             "ok"
         );
         assert_eq!(*stream.sent.lock().unwrap(), vec![request]);
-        assert!(stream.timeouts.lock().unwrap().iter().all(|&t| t == 750));
+        assert!(stream.timeouts.lock().unwrap().iter().all(|&t| t > 0 && t <= 750));
         assert_eq!(stream.closes(), 0);
         session.disconnect().unwrap();
         session.disconnect().unwrap();
@@ -759,6 +829,11 @@ mod tests {
         let first = ScriptedStream::new([]);
         drop(stream_session(&first, dir.path()).unwrap());
         assert_eq!(first.closes(), 1, "dropping a session closes its stream");
+        let events = fs::read_to_string(dir.path().join("events.jsonl")).unwrap();
+        assert!(
+            events.contains("closing the app byte stream failed"),
+            "a failing close() on drop is recorded in the session log"
+        );
         // The directory already holds a session: nothing is overwritten and the new stream is released.
         let second = ScriptedStream::new([]);
         assert!(matches!(
