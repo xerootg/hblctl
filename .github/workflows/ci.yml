@@ -115,11 +115,11 @@ jobs:
       # the host build of hblctl-ffi that build-rust.sh left in target/debug.
       - run: ./gradlew --no-daemon -p consumer-smoke testDebugUnitTest
         working-directory: android
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: hblctl-debug-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: hblctl-ffi-aar
           path: android/lib/build/repo/org/hblctl/hblctl-ffi/*/hblctl-ffi-*.aar
