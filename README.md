@@ -48,6 +48,12 @@ The Jetpack Compose app renders operations and forms from the same registry thro
 It records sessions and supports capture viewing and ZIP export. See [android/README.md](android/README.md)
 for prerequisites, native binding generation, and APK build/test commands.
 
+Other apps can use hblctl without a Rust toolchain: every release from v0.4.0 carries an Android library
+(`org.hblctl:hblctl-ffi`, an AAR with the Kotlin bindings and native libraries for arm64-v8a and x86_64),
+attached to the GitHub release and published to GitHub Packages. An app can also hand hblctl its own byte
+stream (an ADB `tcp:30303` stream, a USB network link) instead of letting it open TCP.
+[android/README.md](android/README.md#use-hblctl-from-your-own-app) shows how.
+
 ## Connecting to the camera
 
 Verified on an original X2D 100C, firmware 4.2.0, over USB (2026-10-31):

@@ -54,10 +54,14 @@ jobs:
           RELEASES: ${{ steps.rp.outputs.releases || '[]' }}
 
   # Releases made with GITHUB_TOKEN do not trigger other workflows, so the APK job is called directly.
+  # A called workflow can only use permissions its caller grants: packages is for the AAR on GitHub Packages.
   apk:
-    name: release APK
+    name: release APK and AAR
     needs: release
     if: needs.release.outputs.releases_created == 'true' && needs.release.outputs.tag != ''
+    permissions:
+      contents: write
+      packages: write
     uses: ./.github/workflows/android-release.yml
     with:
       tag: ${{ needs.release.outputs.tag }}

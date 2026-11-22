@@ -17,6 +17,7 @@ use hblctl_transport::{
 };
 use std::{
     fs::{self, File},
+    future::Future,
     io::Write as _,
     path::Path,
     sync::{Arc, Mutex},
@@ -136,9 +137,98 @@ pub trait StatusCallback: Send + Sync {
     /// State or completed result JSON (including progress and notifications).
     fn status(&self, message: String);
 }
+/// Why a host-supplied [`ByteStream`] call failed.
+#[derive(Debug, thiserror::Error, uniffi::Error)]
+pub enum StreamError {
+    /// `recv` waited `timeout_ms` and nothing arrived. The session treats this like a TCP read timeout.
+    #[error("no bytes arrived in time")]
+    Timeout,
+    /// The stream broke. `detail` ends up in the error the app shows, so say what happened.
+    #[error("{detail}")]
+    Io {
+        /// What went wrong, in words a person can act on.
+        detail: String,
+    },
+}
+impl From<uniffi::UnexpectedUniFFICallbackError> for StreamError {
+    fn from(e: uniffi::UnexpectedUniFFICallbackError) -> Self {
+        Self::Io {
+            detail: format!(
+                "the app's byte stream threw an unexpected exception: {}",
+                e.reason
+            ),
+        }
+    }
+}
+/// A byte stream the host app supplies, for links Rust cannot open itself: an ADB `tcp:30303` stream
+/// to the camera, a USB network link the app configured, or a test double.
+///
+/// Bytes are the raw 30303 protocol: hblctl frames and records them exactly as it does over TCP. Calls
+/// arrive one at a time on the thread running [`Session::invoke`], with the session lock held, so an
+/// implementation must not call back into the [`Session`] from inside them.
+#[uniffi::export(callback_interface)]
+pub trait ByteStream: Send + Sync {
+    /// Write all of `bytes`, or fail.
+    fn send(&self, bytes: Vec<u8>) -> Result<(), StreamError>;
+    /// Block up to `timeout_ms` for the next bytes. Return them (never empty), `None` once the peer has
+    /// closed the stream, or [`StreamError::Timeout`] if nothing arrived. The wait must honour
+    /// `timeout_ms`: hblctl cannot interrupt a blocked call.
+    fn recv(&self, timeout_ms: u64) -> Result<Option<Vec<u8>>, StreamError>;
+    /// Release the stream. Called exactly once, when the session disconnects, loses the link, or fails
+    /// to start. Errors are logged and otherwise ignored.
+    fn close(&self) -> Result<(), StreamError>;
+}
+/// Adapts a [`ByteStream`] to [`Transport`] and closes it when dropped.
+struct HostStream {
+    stream: Box<dyn ByteStream>,
+    read_timeout: Duration,
+}
+impl HostStream {
+    fn transport_error(&self, e: StreamError) -> hblctl_transport::Error {
+        match e {
+            StreamError::Timeout => hblctl_transport::Error::Timeout(self.read_timeout),
+            StreamError::Io { detail } => {
+                hblctl_transport::Error::Io(std::io::Error::other(format!("app byte stream: {detail}")))
+            }
+        }
+    }
+    fn send_now(&self, bytes: &[u8]) -> Result<(), hblctl_transport::Error> {
+        self.stream
+            .send(bytes.to_vec())
+            .map_err(|e| self.transport_error(e))
+    }
+    fn recv_now(&self) -> Result<Option<Vec<u8>>, hblctl_transport::Error> {
+        let timeout_ms = u64::try_from(self.read_timeout.as_millis()).unwrap_or(u64::MAX);
+        match self.stream.recv(timeout_ms) {
+            Ok(Some(bytes)) if bytes.is_empty() => Err(hblctl_transport::Error::Io(std::io::Error::other(
+                "app byte stream returned an empty chunk: return null at end of stream, \
+                 or throw StreamException.Timeout when nothing arrived",
+            ))),
+            Ok(chunk) => Ok(chunk),
+            Err(e) => Err(self.transport_error(e)),
+        }
+    }
+}
+// The host calls block, so these futures are ready as soon as they are created (like MockTransport's).
+impl Transport for HostStream {
+    fn send(&mut self, bytes: &[u8]) -> impl Future<Output = Result<(), hblctl_transport::Error>> + Send {
+        std::future::ready(self.send_now(bytes))
+    }
+    fn recv(&mut self) -> impl Future<Output = Result<Option<Vec<u8>>, hblctl_transport::Error>> + Send {
+        std::future::ready(self.recv_now())
+    }
+}
+impl Drop for HostStream {
+    fn drop(&mut self) {
+        if let Err(error) = self.stream.close() {
+            tracing::warn!(target: "hblctl::session", %error, "closing the app byte stream failed");
+        }
+    }
+}
 type Camera<T> = Client<Recording<T, File>>;
 enum Link {
     Tcp(TcpTransport),
+    Stream(HostStream),
     #[cfg(test)]
     Mock(hblctl_transport::mock::MockTransport),
 }
@@ -146,6 +236,7 @@ impl Transport for Link {
     async fn send(&mut self, bytes: &[u8]) -> Result<(), hblctl_transport::Error> {
         match self {
             Self::Tcp(t) => t.send(bytes).await,
+            Self::Stream(t) => t.send(bytes).await,
             #[cfg(test)]
             Self::Mock(t) => t.send(bytes).await,
         }
@@ -153,6 +244,7 @@ impl Transport for Link {
     async fn recv(&mut self) -> Result<Option<Vec<u8>>, hblctl_transport::Error> {
         match self {
             Self::Tcp(t) => t.recv().await,
+            Self::Stream(t) => t.recv().await,
             #[cfg(test)]
             Self::Mock(t) => t.recv().await,
         }
@@ -170,14 +262,24 @@ pub struct Session {
     log: tracing::Dispatch,
     callback: Mutex<Option<Arc<dyn StatusCallback>>>,
 }
+/// Where a session's bytes go, as recorded in `meta.json`.
+enum Endpoint<'a> {
+    /// Rust opened a TCP connection.
+    Tcp { host: &'a str, port: u16 },
+    /// The app supplied a [`ByteStream`]; `label` is its own description of the link.
+    Stream { label: &'a str },
+}
 fn files(
     dir: &Path,
-    host: &str,
-    port: u16,
+    endpoint: &Endpoint<'_>,
     allow: Safety,
 ) -> Result<(CaptureWriter<File>, tracing::Dispatch), Error> {
     fs::create_dir_all(dir).map_err(session_error)?;
-    let meta = serde_json::json!({"hblctl_version": env!("CARGO_PKG_VERSION"), "started_utc": time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).map_err(session_error)?, "os": std::env::consts::OS, "arch": std::env::consts::ARCH, "argv": ["android", host], "port": port, "allow": format!("{allow:?}")});
+    let (transport, target, port) = match *endpoint {
+        Endpoint::Tcp { host, port } => ("tcp", host, Some(port)),
+        Endpoint::Stream { label } => ("stream", label, None),
+    };
+    let meta = serde_json::json!({"hblctl_version": env!("CARGO_PKG_VERSION"), "started_utc": time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).map_err(session_error)?, "os": std::env::consts::OS, "arch": std::env::consts::ARCH, "argv": ["android", target], "transport": transport, "port": port, "allow": format!("{allow:?}")});
     let create = |name| {
         File::options()
             .write(true)
@@ -234,28 +336,50 @@ impl Session {
         allow: Safety,
         session_dir: String,
     ) -> Result<Self, Error> {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(session_error)?;
-        let (capture, log) = files(Path::new(&session_dir), &host, port, allow)?;
+        let runtime = runtime()?;
+        let (capture, log) = files(
+            Path::new(&session_dir),
+            &Endpoint::Tcp { host: &host, port },
+            allow,
+        )?;
         let timeout = Duration::from_millis(timeout_ms);
-        let client = tracing::dispatcher::with_default(&log, || {
-            tracing::info!(target: "hblctl::session", "connecting");
+        let link = tracing::dispatcher::with_default(&log, || {
+            tracing::info!(target: "hblctl::session", transport = "tcp", "connecting");
             runtime
                 .block_on(TcpTransport::connect(&format!("{host}:{port}"), timeout, timeout))
-                .map(|tcp| Client::new(Recording::new(Link::Tcp(tcp), capture), timeout, 1))
+                .map(Link::Tcp)
                 .map_err(|e| Error::Transport {
                     detail: e.to_string(),
                 })
         })?;
-        Ok(Self {
-            runtime,
-            inner: Mutex::new(Inner { client: Some(client) }),
-            policy: Policy::up_to(allow.into()),
-            log,
-            callback: Mutex::new(None),
-        })
+        Ok(Self::start(runtime, link, capture, log, timeout, allow))
+    }
+    /// Start a session over a byte stream the app already opened (for example an ADB `tcp:30303`
+    /// stream to the camera). `label` describes the link in the session's `meta.json`. The session
+    /// owns the stream from here on and calls [`ByteStream::close`] exactly once, even if this fails.
+    #[uniffi::constructor]
+    pub fn connect_stream(
+        stream: Box<dyn ByteStream>,
+        label: String,
+        timeout_ms: u64,
+        allow: Safety,
+        session_dir: String,
+    ) -> Result<Self, Error> {
+        let timeout = Duration::from_millis(timeout_ms);
+        let link = Link::Stream(HostStream {
+            stream,
+            read_timeout: timeout,
+        });
+        let runtime = runtime()?;
+        let (capture, log) = files(
+            Path::new(&session_dir),
+            &Endpoint::Stream { label: &label },
+            allow,
+        )?;
+        tracing::dispatcher::with_default(&log, || {
+            tracing::info!(target: "hblctl::session", transport = "stream", %label, "connected");
+        });
+        Ok(Self::start(runtime, link, capture, log, timeout, allow))
     }
     /// Register or replace the status observer.
     pub fn set_status_callback(&self, callback: Box<dyn StatusCallback>) -> Result<(), Error> {
@@ -276,9 +400,15 @@ impl Session {
                 }
                 result
             });
-            if matches!(result, Err(Error::Transport { .. })) {
-                inner.client = None;
-            }
+            // The lost link is dropped after the lock is released, so a host stream's close() never
+            // runs under it, and inside the session log, so a failing close() is recorded there.
+            let lost = if matches!(result, Err(Error::Transport { .. })) {
+                inner.client.take()
+            } else {
+                None
+            };
+            drop(inner);
+            tracing::dispatcher::with_default(&self.log, || drop(lost));
             result
         };
         self.notify(result.as_ref().map_or_else(ToString::to_string, Clone::clone));
@@ -286,8 +416,9 @@ impl Session {
     }
     /// Close the socket and flush the capture.
     pub fn disconnect(&self) -> Result<(), Error> {
-        self.inner.lock().map_err(session_error)?.client = None;
+        let link = self.inner.lock().map_err(session_error)?.client.take();
         tracing::dispatcher::with_default(&self.log, || {
+            drop(link);
             tracing::info!(target: "hblctl::session", "disconnected");
         });
         self.notify("disconnected".into());
@@ -298,7 +429,31 @@ impl Session {
         Ok(self.inner.lock().map_err(session_error)?.client.is_some())
     }
 }
+fn runtime() -> Result<tokio::runtime::Runtime, Error> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(session_error)
+}
 impl Session {
+    fn start(
+        runtime: tokio::runtime::Runtime,
+        link: Link,
+        capture: CaptureWriter<File>,
+        log: tracing::Dispatch,
+        timeout: Duration,
+        allow: Safety,
+    ) -> Self {
+        Self {
+            runtime,
+            inner: Mutex::new(Inner {
+                client: Some(Client::new(Recording::new(link, capture), timeout, 1)),
+            }),
+            policy: Policy::up_to(allow.into()),
+            log,
+            callback: Mutex::new(None),
+        }
+    }
     fn notify(&self, detail: String) {
         let callback = self.callback.lock().ok().and_then(|c| c.clone());
         if let Some(callback) = callback {
@@ -336,38 +491,21 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let (capture, log) = files(dir.path(), "mock", 30303, Safety::Read).unwrap();
-        let registry = registry::builtin();
-        let (command, func) = registry
-            .operations()
-            .find(|(_, f)| f.safety == hblctl_core::Safety::Read && f.request.is_empty())
-            .unwrap();
-        let request = Sutest::new(command.id, func.func, 1);
-        let reply = BusFrame {
-            header: BusHeader {
-                signal: SIGNAL_TEST_TX,
-                origin: NODE_EAGLE,
-                dest: NODE_TCP_HOST,
-                kind: TYPE_SUTEST,
+        let (capture, log) = files(
+            dir.path(),
+            &Endpoint::Tcp {
+                host: "mock",
+                port: 30303,
             },
-            record: request.clone(),
-        }
-        .encode_reply_message();
-        let mock = MockTransport::new([
-            Step::Expect(BusFrame::command(request).encode()),
-            Step::Reply(reply),
-        ]);
+            Safety::Read,
+        )
+        .unwrap();
+        let registry = registry::builtin();
+        let (command, func, request, reply) = read_exchange();
+        let mock = MockTransport::new([Step::Expect(request), Step::Reply(reply)]);
         let mut client = Client::new(Recording::new(mock, capture), Duration::from_secs(1), 1);
         tracing::dispatcher::with_default(&log, || {
-            let result = run(
-                &runtime,
-                &mut client,
-                Policy::default(),
-                &command.name,
-                &func.name,
-                "{}",
-            )
-            .unwrap();
+            let result = run(&runtime, &mut client, Policy::default(), &command, &func, "{}").unwrap();
             assert_eq!(
                 serde_json::from_str::<serde_json::Value>(&result).unwrap()["status"],
                 "ok"
@@ -381,14 +519,7 @@ mod tests {
                 Err(Error::Refused { .. })
             ));
             assert!(matches!(
-                run(
-                    &runtime,
-                    &mut client,
-                    Policy::default(),
-                    &command.name,
-                    &func.name,
-                    "[]"
-                ),
+                run(&runtime, &mut client, Policy::default(), &command, &func, "[]"),
                 Err(Error::Arguments { .. })
             ));
             assert!(matches!(
@@ -396,8 +527,8 @@ mod tests {
                     &runtime,
                     &mut client,
                     Policy::default(),
-                    &command.name,
-                    &func.name,
+                    &command,
+                    &func,
                     r#"{"extra":1}"#
                 ),
                 Err(Error::Arguments { .. })
@@ -422,12 +553,30 @@ mod tests {
             let v: serde_json::Value = serde_json::from_str(line).unwrap();
             v["level"] == "TRACE" && v["target"] == "hblctl::wire"
         }));
-        assert!(files(dir.path(), "mock", 30303, Safety::Read).is_err());
+        assert!(
+            files(
+                dir.path(),
+                &Endpoint::Tcp {
+                    host: "mock",
+                    port: 30303
+                },
+                Safety::Read
+            )
+            .is_err()
+        );
     }
     #[test]
     fn mock_connection_state_and_transport_failure() {
         let dir = tempfile::tempdir().unwrap();
-        let (capture, log) = files(dir.path(), "mock", 30303, Safety::Read).unwrap();
+        let (capture, log) = files(
+            dir.path(),
+            &Endpoint::Tcp {
+                host: "mock",
+                port: 30303,
+            },
+            Safety::Read,
+        )
+        .unwrap();
         let session = Session {
             runtime: tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -466,6 +615,158 @@ mod tests {
         assert!(!session.is_connected().unwrap());
         session.disconnect().unwrap();
         session.disconnect().unwrap();
+    }
+    /// A read-only operation with no arguments, the command bytes it sends and the camera's ok reply.
+    fn read_exchange() -> (String, String, Vec<u8>, Vec<u8>) {
+        let registry = registry::builtin();
+        let (command, func) = registry
+            .operations()
+            .find(|(_, f)| f.safety == hblctl_core::Safety::Read && f.request.is_empty())
+            .unwrap();
+        let request = Sutest::new(command.id, func.func, 1);
+        let reply = BusFrame {
+            header: BusHeader {
+                signal: SIGNAL_TEST_TX,
+                origin: NODE_EAGLE,
+                dest: NODE_TCP_HOST,
+                kind: TYPE_SUTEST,
+            },
+            record: request.clone(),
+        }
+        .encode_reply_message();
+        (
+            command.name.clone(),
+            func.name.clone(),
+            BusFrame::command(request).encode(),
+            reply,
+        )
+    }
+    /// What a scripted host stream does on each `recv`.
+    enum Recv {
+        Bytes(Vec<u8>),
+        Timeout,
+        Closed,
+    }
+    /// A host [`ByteStream`] double: records what it was sent and replays scripted `recv` results.
+    #[derive(Clone, Default)]
+    struct ScriptedStream {
+        sent: Arc<Mutex<Vec<Vec<u8>>>>,
+        replies: Arc<Mutex<std::collections::VecDeque<Recv>>>,
+        timeouts: Arc<Mutex<Vec<u64>>>,
+        closes: Arc<Mutex<u32>>,
+    }
+    impl ScriptedStream {
+        fn new(replies: impl IntoIterator<Item = Recv>) -> Self {
+            let stream = Self::default();
+            stream.replies.lock().unwrap().extend(replies);
+            stream
+        }
+        fn closes(&self) -> u32 {
+            *self.closes.lock().unwrap()
+        }
+    }
+    impl ByteStream for ScriptedStream {
+        fn send(&self, bytes: Vec<u8>) -> Result<(), StreamError> {
+            self.sent.lock().unwrap().push(bytes);
+            Ok(())
+        }
+        fn recv(&self, timeout_ms: u64) -> Result<Option<Vec<u8>>, StreamError> {
+            self.timeouts.lock().unwrap().push(timeout_ms);
+            match self.replies.lock().unwrap().pop_front() {
+                Some(Recv::Bytes(b)) => Ok(Some(b)),
+                Some(Recv::Timeout) => Err(StreamError::Timeout),
+                Some(Recv::Closed) | None => Ok(None),
+            }
+        }
+        fn close(&self) -> Result<(), StreamError> {
+            *self.closes.lock().unwrap() += 1;
+            Err(StreamError::Io {
+                detail: "close errors are only logged".into(),
+            })
+        }
+    }
+    fn stream_session(stream: &ScriptedStream, dir: &Path) -> Result<Session, Error> {
+        Session::connect_stream(
+            Box::new(stream.clone()),
+            "adb tcp:30303".into(),
+            750,
+            Safety::Read,
+            dir.to_string_lossy().into_owned(),
+        )
+    }
+    #[test]
+    fn host_stream_carries_the_protocol_and_is_recorded() {
+        let dir = tempfile::tempdir().unwrap();
+        let (command, func, request, reply) = read_exchange();
+        // The reply arrives in two chunks, as a real stream may deliver it.
+        let (head, tail) = reply.split_at(5);
+        let stream = ScriptedStream::new([Recv::Bytes(head.to_vec()), Recv::Bytes(tail.to_vec())]);
+        let session = stream_session(&stream, dir.path()).unwrap();
+        let result = session.invoke(command, func, "{}".into()).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&result).unwrap()["status"],
+            "ok"
+        );
+        assert_eq!(*stream.sent.lock().unwrap(), vec![request]);
+        assert!(stream.timeouts.lock().unwrap().iter().all(|&t| t == 750));
+        assert_eq!(stream.closes(), 0);
+        session.disconnect().unwrap();
+        session.disconnect().unwrap();
+        assert_eq!(stream.closes(), 1, "close() runs exactly once");
+        let events = fs::read_to_string(dir.path().join("events.jsonl")).unwrap();
+        assert!(
+            events.contains("closing the app byte stream failed"),
+            "a failing close() is recorded in the session log"
+        );
+        let meta: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(dir.path().join("meta.json")).unwrap()).unwrap();
+        assert_eq!(meta["transport"], "stream");
+        assert_eq!(meta["argv"][1], "adb tcp:30303");
+        assert!(meta["port"].is_null());
+        let records = CaptureReader::new(File::open(dir.path().join("capture.hblcap")).unwrap())
+            .unwrap()
+            .records()
+            .unwrap();
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].direction, Direction::Sent);
+    }
+    #[test]
+    fn host_stream_failures_close_the_session_once() {
+        let (command, func, _, _) = read_exchange();
+        let cases: [(Recv, &str); 3] = [
+            (Recv::Timeout, "timed out after 750ms"),
+            (Recv::Bytes(Vec::new()), "empty chunk"),
+            (Recv::Closed, "closed"),
+        ];
+        for (reply, expected) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let stream = ScriptedStream::new([reply]);
+            let session = stream_session(&stream, dir.path()).unwrap();
+            match session.invoke(command.clone(), func.clone(), "{}".into()) {
+                Err(Error::Transport { detail }) => assert!(detail.contains(expected), "{detail}"),
+                other => panic!("expected a transport error containing {expected:?}, got {other:?}"),
+            }
+            assert!(!session.is_connected().unwrap());
+            assert_eq!(stream.closes(), 1);
+            session.disconnect().unwrap();
+            drop(session);
+            assert_eq!(stream.closes(), 1);
+        }
+    }
+    #[test]
+    fn host_stream_is_closed_when_the_session_cannot_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = ScriptedStream::new([]);
+        drop(stream_session(&first, dir.path()).unwrap());
+        assert_eq!(first.closes(), 1, "dropping a session closes its stream");
+        // The directory already holds a session: nothing is overwritten and the new stream is released.
+        let second = ScriptedStream::new([]);
+        assert!(matches!(
+            stream_session(&second, dir.path()),
+            Err(Error::Session { .. })
+        ));
+        assert_eq!(second.closes(), 1);
+        assert!(second.sent.lock().unwrap().is_empty());
     }
     #[test]
     fn registry_queries_share_desktop_schema() {
