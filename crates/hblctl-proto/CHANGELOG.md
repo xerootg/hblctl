@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/xerootg/hblctl/releases/tag/hblctl-proto-v0.4.0) - 2026-11-22
+
+### Fixed
+
+- *(transport)* [**breaking**] read camera replies as 1024-byte messages
+
+### Other
+
+- release v0.1.0 ([#5](https://github.com/xerootg/hblctl/pull/5))
+- [**breaking**] relicense to LGPL-3.0-or-later and set up project tooling
+- sutest record, bus frame and CRC-16/XMODEM
+
 ## [0.1.0](https://github.com/xerootg/hblctl/releases/tag/hblctl-proto-v0.1.0) - 2026-10-30
 
 ### Fixed
