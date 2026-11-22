@@ -209,10 +209,9 @@ impl HostStream {
         let left = self
             .deadline
             .map_or(self.read_timeout, |d| d.saturating_duration_since(Instant::now()));
-        let timeout_ms = u64::try_from(left.as_millis()).unwrap_or(u64::MAX);
-        if timeout_ms == 0 {
+        let Some(timeout_ms) = budget_ms(left) else {
             return Err(hblctl_transport::Error::Timeout(self.read_timeout));
-        }
+        };
         match self.stream.recv(timeout_ms) {
             Ok(Some(bytes)) if bytes.is_empty() => Err(hblctl_transport::Error::Io(std::io::Error::other(
                 "app byte stream returned an empty chunk: return null at end of stream, \
@@ -222,6 +221,14 @@ impl HostStream {
             Err(e) => Err(self.transport_error(e)),
         }
     }
+}
+/// Milliseconds to offer the host for a wait of `left`: `None` once nothing is left, otherwise rounded
+/// up, so a budget under one millisecond still lets an already-buffered reply through.
+fn budget_ms(left: Duration) -> Option<u64> {
+    if left.is_zero() {
+        return None;
+    }
+    Some(u64::try_from(left.as_nanos().div_ceil(1_000_000)).unwrap_or(u64::MAX))
 }
 // The host calls block, so these futures are ready as soon as they are created (like MockTransport's).
 impl Transport for HostStream {
@@ -739,6 +746,15 @@ mod tests {
             Safety::Read,
             dir.to_string_lossy().into_owned(),
         )
+    }
+    #[test]
+    fn stream_budget_rounds_up_and_ends_at_zero() {
+        assert_eq!(budget_ms(Duration::ZERO), None);
+        assert_eq!(budget_ms(Duration::from_nanos(1)), Some(1));
+        assert_eq!(budget_ms(Duration::from_micros(999)), Some(1));
+        assert_eq!(budget_ms(Duration::from_millis(1)), Some(1));
+        assert_eq!(budget_ms(Duration::from_micros(1001)), Some(2));
+        assert_eq!(budget_ms(Duration::MAX), Some(u64::MAX));
     }
     #[test]
     fn host_stream_keeps_the_command_deadline_across_chunks() {

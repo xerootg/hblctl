@@ -47,6 +47,8 @@ val buildRust by tasks.registering(Exec::class) {
     inputs.file(rootProject.file("build-rust.sh"))
     outputs.dir(layout.buildDirectory.dir("generated/uniffi"))
     outputs.dir(layout.buildDirectory.dir("generated/jniLibs"))
+    // The host build the consumer smoke test loads; declaring it makes Gradle rebuild it if it is deleted.
+    outputs.file("../../target/debug/libhblctl_ffi.so")
 }
 tasks.named("preBuild") { dependsOn(buildRust) }
 tasks.configureEach {
