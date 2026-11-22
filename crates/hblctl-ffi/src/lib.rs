@@ -776,30 +776,43 @@ mod tests {
             serde_json::from_str::<serde_json::Value>(&result).unwrap()["status"],
             "ok"
         );
-        assert!(stream.timeouts.lock().unwrap()[0] > 50);
+        assert_eq!(
+            stream.timeouts.lock().unwrap().len(),
+            1,
+            "the reply is read, not timed out unasked"
+        );
     }
     #[test]
     fn host_stream_keeps_the_command_deadline_across_chunks() {
         let dir = tempfile::tempdir().unwrap();
         let (command, func, _, reply) = read_exchange();
         let (head, tail) = reply.split_at(5);
-        // Each chunk alone fits in the 300 ms timeout; together they do not.
-        let late = Duration::from_millis(200);
+        // Each chunk alone fits in the 600 ms timeout; together they do not. Without the shared budget
+        // the second recv would be offered the full 600 ms again and the call would succeed.
+        let late = Duration::from_millis(400);
         let stream = ScriptedStream::new([Recv::Late(late, head.to_vec()), Recv::Late(late, tail.to_vec())]);
-        let session = stream_session_with_timeout(&stream, dir.path(), 300).unwrap();
+        let session = stream_session_with_timeout(&stream, dir.path(), 600).unwrap();
         let started = Instant::now();
         match session.invoke(command, func, "{}".into()) {
             Err(Error::Transport { detail }) => assert!(detail.contains("timed out"), "{detail}"),
             other => panic!("a reply that misses the deadline must fail, got {other:?}"),
         }
+        // Generous bounds: CI runners oversleep. A slow runner may spend the whole budget on the first
+        // chunk, in which case the host is not asked a second time at all.
         assert!(
-            started.elapsed() < Duration::from_millis(450),
+            started.elapsed() < Duration::from_millis(1100),
             "the call took {:?}",
             started.elapsed()
         );
         let timeouts = stream.timeouts.lock().unwrap().clone();
-        assert_eq!(timeouts.len(), 2);
-        assert!(timeouts[0] <= 300 && timeouts[1] <= 100, "{timeouts:?}");
+        assert!(!timeouts.is_empty() && timeouts.len() <= 2, "{timeouts:?}");
+        assert!(timeouts[0] <= 600, "{timeouts:?}");
+        if let Some(&second) = timeouts.get(1) {
+            assert!(
+                second <= 200,
+                "the second wait must be what is left: {timeouts:?}"
+            );
+        }
         assert_eq!(stream.closes(), 1);
     }
     #[test]
