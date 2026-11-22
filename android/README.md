@@ -133,8 +133,9 @@ The rules, which the library relies on:
 - Throw `StreamException.Io(detail)` for a broken stream; `detail` appears in the error the user sees.
 - `close()` is called exactly once: on `disconnect()`, when the link fails, when the session is closed
   or garbage-collected, and also if `connectStream` itself fails. Do not close the stream yourself.
-- Calls happen one at a time on the thread running `invoke`, inside the session's lock, so they must not
-  call back into the `Session`.
+- `send` and `recv` run one at a time on the thread running `invoke`, inside the session's lock, so
+  they must not call back into the `Session`. `close()` never overlaps them, runs outside the lock, and
+  can arrive on another thread: the one calling `disconnect()`, or the garbage collector's cleaner.
 
 The bytes are the plain 30303 protocol, so captures and logs look the same as over TCP; `meta.json`
 records `"transport": "stream"` and the label.

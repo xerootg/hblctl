@@ -163,9 +163,11 @@ impl From<uniffi::UnexpectedUniFFICallbackError> for StreamError {
 /// A byte stream the host app supplies, for links Rust cannot open itself: an ADB `tcp:30303` stream
 /// to the camera, a USB network link the app configured, or a test double.
 ///
-/// Bytes are the raw 30303 protocol: hblctl frames and records them exactly as it does over TCP. Calls
-/// arrive one at a time on the thread running [`Session::invoke`], with the session lock held, so an
-/// implementation must not call back into the [`Session`] from inside them.
+/// Bytes are the raw 30303 protocol: hblctl frames and records them exactly as it does over TCP.
+/// `send` and `recv` arrive one at a time on the thread running [`Session::invoke`], with the session
+/// lock held, so they must not call back into the [`Session`]. `close` never overlaps them; it runs
+/// outside the lock on whichever thread disconnects, loses the link, or frees the session (on Android
+/// that can be the garbage collector's cleaner thread).
 #[uniffi::export(callback_interface)]
 pub trait ByteStream: Send + Sync {
     /// Write all of `bytes`, or fail.
