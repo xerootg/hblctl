@@ -156,7 +156,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 The library's `preBuild` runs `build-rust.sh`, which builds both ABIs and generates the Kotlin into
 `lib/build/generated/uniffi`, with native libraries in `lib/build/generated/jniLibs`. Native libraries
 are built with Cargo's `dev` profile; `HBLCTL_RUST_PROFILE=release` (set by the release workflow)
-builds optimised ones. The standalone generation commands are:
+builds optimised ones. To generate the bindings by hand instead, run these from the **repository
+root** (not `android/`):
 
 ```sh
 cargo build --offline -p hblctl-ffi
@@ -168,6 +169,8 @@ must already be fetched (`cargo fetch --locked` on a network-enabled machine). G
 also requires its dependencies cached or network access.
 
 ### Build and check the AAR
+
+From `android/`:
 
 ```sh
 ./gradlew :lib:publishReleasePublicationToLocalRepository
